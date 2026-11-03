@@ -7,7 +7,6 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
     CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER
 from .coordinator import AgurDataUpdateCoordinator
-from .repairs import async_check_and_create_repair_issues
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -46,10 +45,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
-    if import_statistics:
-        hass.async_create_task(
-            async_check_and_create_repair_issues(hass, contract_ids)
-        )
+    # Note: the upstream "statistics unit" repair (migration of agur:* statistics to a
+    # sensor.* id) is intentionally not registered: statistics are kept as external
+    # statistics `agur:water_consumption_<contract>` in m³ (see coordinator).
 
     config_entry.add_update_listener(async_reload_entry)
     return True
