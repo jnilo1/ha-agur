@@ -9,6 +9,7 @@ from homeassistant.core import callback, HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation
 from homeassistant.helpers.selector import TextSelector, TextSelectorType, TextSelectorConfig
+from requests import Session
 from voluptuous import Schema
 
 from .agur_client import AgurClient
@@ -18,6 +19,7 @@ from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, VERSION, CONF_CONTRACT_
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 AUTH_TOKEN = "auth"
 SESSION_TOKEN = "session"
+HTTP_SESSION = "http"
 USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_PROVIDER, default=DEFAULT_PROVIDER): vol.In({k: v["name"] for k, v in PROVIDERS.items()}),
@@ -40,22 +42,28 @@ async def get_agur_tokens(hass: HomeAssistant, username: str, password: str, pro
     try:
         tokens = {}
         provider_config = PROVIDERS[provider]
+        # One HTTP session for the whole flow: the API sets an affinity cookie on
+        # generateToken that every later call must carry.
+        http = Session()
+        tokens[HTTP_SESSION] = http
 
         client = AgurClient(
             host=provider_config["host"],
             base_path=provider_config["base_path"],
             access_key=provider_config["access_key"],
             client_id=provider_config["client_id"],
+            http_session=http,
         )
         response = await hass.async_add_executor_job(client.init)
         tokens[SESSION_TOKEN] = response["token"]
-        
+
         client = AgurClient(
             session_token=tokens[SESSION_TOKEN],
             host=provider_config["host"],
             base_path=provider_config["base_path"],
             access_key=provider_config["access_key"],
             client_id=provider_config["client_id"],
+            http_session=http,
         )
         response = await hass.async_add_executor_job(client.login, username, password)
         tokens[AUTH_TOKEN] = response["tokenAuthentique"]
@@ -65,7 +73,7 @@ async def get_agur_tokens(hass: HomeAssistant, username: str, password: str, pro
         raise AuthError(ex)
 
 
-async def get_agur_contract_options(hass: HomeAssistant, session_token: str, auth_token: str, provider: str = DEFAULT_PROVIDER):
+async def get_agur_contract_options(hass: HomeAssistant, session_token: str, auth_token: str, provider: str = DEFAULT_PROVIDER, http_session: Session | None = None):
     try:
         provider_config = PROVIDERS[provider]
         client = AgurClient(
@@ -75,6 +83,7 @@ async def get_agur_contract_options(hass: HomeAssistant, session_token: str, aut
             base_path=provider_config["base_path"],
             access_key=provider_config["access_key"],
             client_id=provider_config["client_id"],
+            http_session=http_session,
         )
         return {c.id: f"Contract {c.id} ({c.address})" for c in await hass.async_add_executor_job(client.get_contracts)}
     except Exception as ex:
@@ -93,6 +102,7 @@ class AgurConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._password: str | None = None
         self._session_token: str | None = None
         self._auth_token: str | None = None
+        self._http_session: Session | None = None
         self._available_contracts: list[dict[str, Any]] = []
         self._contract_ids: str | None = None
         self._import_statistics: bool | None = None
@@ -120,7 +130,8 @@ class AgurConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             hass=self.hass,
             session_token=self._session_token,
             auth_token=self._auth_token,
-            provider=self._provider
+            provider=self._provider,
+            http_session=self._http_session,
         )
         default_contracts = list(available_contracts.keys())
 
@@ -161,6 +172,7 @@ class AgurConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             self._session_token = tokens[SESSION_TOKEN]
             self._auth_token = tokens[AUTH_TOKEN]
+            self._http_session = tokens[HTTP_SESSION]
 
         except Exception as ex:
             _LOGGER.error(ex)
@@ -268,7 +280,8 @@ class AgurOptionFlow(config_entries.OptionsFlow):
                 hass=self.hass,
                 session_token=tokens[SESSION_TOKEN],
                 auth_token=tokens[AUTH_TOKEN],
-                provider=provider
+                provider=provider,
+                http_session=tokens[HTTP_SESSION],
             )
         except ConfigError as ex:
             _LOGGER.error(ex)
