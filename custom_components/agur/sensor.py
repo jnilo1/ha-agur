@@ -112,7 +112,7 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
             self._attr_extra_state_attributes["date"] = getattr(
                 self.coordinator.data[self._contract_id],
                 f"{self.entity_description.key}_date"
-            ),
+            )
 
         if entity_description.key == "last_invoice":
             invoice = self.coordinator.data[contract_id].last_invoice

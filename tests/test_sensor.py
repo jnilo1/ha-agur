@@ -73,10 +73,6 @@ async def test_sensor_attributes(hass: HomeAssistant, agur_api: FakeAgurApi) -> 
     assert "date" in hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known bug, fixed in a follow-up PR: a trailing comma makes the `date` attribute a 1-tuple",
-)
 async def test_sensor_date_attribute_is_a_datetime(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     await _setup(hass)
 
