@@ -72,8 +72,13 @@ All 3 sensors also have attributes for easy automation consumption
 
 ## Statistics
 
-If you check the option `Import historical statistics for selected contracts` then the statistics for the last 3 years
-will be imported automatically into the `Energy dashboard` and will be kept up to date.
+If you check the option `Import historical statistics for selected contracts` then the consumption history (the last 3
+years or so) is imported as the external statistic `agur:water_consumption_<contract_id>` (in m³) and kept up to date
+every day, with the actual reading dates. Select that statistic as the water source of the `Energy dashboard` (its id is
+also given by the `statistic_id` attribute of `sensor.agur_last_index_<contract_id>`).
+
+The history is deliberately not attached to a sensor: Home Assistant compiles its own statistics for every sensor with a
+`state_class`, and they would be mixed with the imported ones.
 
 > [!NOTE]
 > The API returns data up to 24 or 48 hours before the actual date, and only once a day. It's unfortunately impossible

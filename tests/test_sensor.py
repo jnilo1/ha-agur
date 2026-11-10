@@ -29,8 +29,6 @@ async def test_sensor_values(hass: HomeAssistant, agur_api: FakeAgurApi) -> None
     # Latest index of the fixtures: base + 370 L
     assert float(hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").state) == 1_000_370
     assert float(hass.states.get(f"sensor.agur_last_index_{CONTRACT_2}").state) == 2_000_370
-    assert float(hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}").state) == pytest.approx(1000.37)
-    assert float(hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_2}").state) == pytest.approx(2000.37)
     assert float(hass.states.get(f"sensor.agur_last_invoice_{CONTRACT_1}").state) == 45.67
     assert float(hass.states.get(f"sensor.agur_balance_{CONTRACT_1}").state) == -12.5
     assert float(hass.states.get(f"sensor.agur_balance_{CONTRACT_2}").state) == 0.0
@@ -43,10 +41,6 @@ async def test_sensor_units_and_classes(hass: HomeAssistant, agur_api: FakeAgurA
     assert last_index["unit_of_measurement"] == "L"
     assert last_index["device_class"] == "water"
     assert last_index["state_class"] == "total_increasing"
-
-    consumption = hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}").attributes
-    assert consumption["unit_of_measurement"] == "m³"
-    assert consumption["state_class"] == "total_increasing"
 
     for key in ("last_invoice", "balance"):
         attributes = hass.states.get(f"sensor.agur_{key}_{CONTRACT_1}").attributes
@@ -82,11 +76,11 @@ async def test_sensor_date_attribute_is_a_datetime(hass: HomeAssistant, agur_api
     assert attributes["date"] == datetime(2026, 10, 1, tzinfo=TZ)
 
 
-async def test_no_consumption_sensor_without_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+async def test_no_statistic_id_attribute_without_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     await _setup(hass, import_statistics=False)
 
     assert hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}") is None
-    assert hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}") is not None
+    assert "statistic_id" not in hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes
     entity_registry = er.async_get(hass)
     assert len(er.async_entries_for_config_entry(entity_registry, ENTRY_ID)) == 6
 
@@ -97,7 +91,7 @@ async def test_sensors_without_data(hass: HomeAssistant, agur_api: FakeAgurApi) 
     agur_api.invoices[CONTRACT_1] = []
     await _setup(hass, contract_ids=[CONTRACT_1])
 
-    for key in ("last_index", "water_consumption", "last_invoice"):
+    for key in ("last_index", "last_invoice"):
         assert hass.states.get(f"sensor.agur_{key}_{CONTRACT_1}").state == "unknown"
     assert "invoice_number" not in hass.states.get(f"sensor.agur_last_invoice_{CONTRACT_1}").attributes
 

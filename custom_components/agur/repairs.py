@@ -8,52 +8,103 @@ from functools import partial
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
-    async_import_statistics,
+    async_add_external_statistics,
     get_metadata,
     statistics_during_period,
 )
 from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DOMAIN
+from .coordinator import statistic_id_for
 
 _LOGGER = logging.getLogger(__name__)
 
-ISSUE_STATISTICS_UNIT_L = "statistics_unit_liters"
+ISSUE_STATISTICS_ON_SENSOR = "statistics_on_sensor"
+
+
+def sensor_statistic_id(contract_id: str) -> str:
+    """Statistic id under which versions 0.1.4 and 0.1.5 imported the consumption history."""
+    return f"sensor.{DOMAIN}_water_consumption_{contract_id}"
+
+
+async def async_convert_legacy_statistics(hass: HomeAssistant, contract_ids: list[str]) -> None:
+    """Convert to m³ the external statistics imported in liters by versions up to 0.1.3.
+
+    Statistics without unit were in liters too. The rows are read, converted and imported again under the same
+    statistic id with m³ metadata: nothing is lost so there is nothing to confirm. (The recorder's own unit
+    change service only handles the statistics it compiles itself, not external ones.) This must run before the
+    coordinator imports new rows in m³ under the same statistic id, which would relabel the liters as m³.
+    """
+    recorder = get_instance(hass)
+    for contract_id in contract_ids:
+        external_id = statistic_id_for(contract_id)
+        metadata = await _async_get_metadata(hass, external_id)
+        if metadata is None or metadata["unit_of_measurement"] == UnitOfVolume.CUBIC_METERS:
+            continue
+        unit = metadata["unit_of_measurement"] or UnitOfVolume.LITERS
+        rows = await recorder.async_add_executor_job(
+            statistics_during_period,
+            hass,
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            None,
+            {external_id},
+            "hour",
+            None,
+            {"sum", "state"},
+        )
+        convert = VolumeConverter.converter_factory_allow_none(unit, UnitOfVolume.CUBIC_METERS)
+        converted = [
+            StatisticData(
+                start=datetime.fromtimestamp(row["start"], tz=timezone.utc),
+                state=convert(row.get("state")),
+                sum=convert(row.get("sum")),
+            )
+            for row in rows.get(external_id, [])
+        ]
+        _LOGGER.info(f"Converting {len(converted)} statistics rows of {external_id} from {unit} to m³")
+        async_add_external_statistics(
+            hass,
+            StatisticMetaData(
+                mean_type=StatisticMeanType.NONE,
+                has_sum=True,
+                name=metadata["name"],
+                source=DOMAIN,
+                statistic_id=external_id,
+                unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+                unit_class=VolumeConverter.UNIT_CLASS,
+            ),
+            converted,
+        )
 
 
 async def async_check_and_create_repair_issues(hass: HomeAssistant, contract_ids: list[str]) -> None:
-    """Check each contract's legacy statistics and raise a repair issue if still in L.
+    """Raise a repair issue for the statistics imported under the `water_consumption` sensor by 0.1.4 and 0.1.5.
 
-    Older versions imported external statistics (`agur:water_consumption_<contract>`) in liters. If they
-    are already in m³ (e.g. converted by the user from the statistics developer tools), they are moved to
-    the sensor right away: nothing changes in the values, so there is nothing to confirm.
+    The recorder also compiled its own rows for that sensor (see `statistic_id_for`): those statistics are
+    unusable. They are deleted after confirmation, the external statistics having been imported again from the
+    full history sent by the API.
     """
     for contract_id in contract_ids:
-        old_statistic_id = f"{DOMAIN}:water_consumption_{contract_id}"
-        metadata = await _async_get_metadata(hass, old_statistic_id)
-        if metadata is None:
-            continue
-
-        unit = metadata["unit_of_measurement"]
-        if unit == UnitOfVolume.CUBIC_METERS:
-            _LOGGER.info(f"Statistics {old_statistic_id} are already in m³: moving them to the sensor")
-            await _migrate_statistics(hass, contract_id)
-            continue
-
-        _LOGGER.info(f"Statistics {old_statistic_id} -> Unit found: {unit}. Need a repair")
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            f"{ISSUE_STATISTICS_UNIT_L}_{contract_id}",
-            is_fixable=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_STATISTICS_UNIT_L,
-            translation_placeholders={"contract_id": contract_id},
-        )
+        external_id = statistic_id_for(contract_id)
+        if await _async_get_metadata(hass, sensor_statistic_id(contract_id)) is not None:
+            _LOGGER.info(f"Statistics found on {sensor_statistic_id(contract_id)}: need a repair")
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                f"{ISSUE_STATISTICS_ON_SENSOR}_{contract_id}",
+                is_fixable=True,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_STATISTICS_ON_SENSOR,
+                translation_placeholders={
+                    "contract_id": contract_id,
+                    "sensor_statistic_id": sensor_statistic_id(contract_id),
+                    "statistic_id": external_id,
+                },
+            )
 
 
 async def _async_get_metadata(hass: HomeAssistant, statistic_id: str) -> StatisticMetaData | None:
@@ -64,8 +115,8 @@ async def _async_get_metadata(hass: HomeAssistant, statistic_id: str) -> Statist
     return metadata[statistic_id][1] if statistic_id in metadata else None
 
 
-class StatisticsUnitRepairFlow(ConfirmRepairFlow):
-    """Repair flow to convert water statistics from L to m³."""
+class SensorStatisticsRepairFlow(ConfirmRepairFlow):
+    """Repair flow deleting the statistics imported under the water_consumption sensor by versions 0.1.4-0.1.5."""
 
     def __init__(self, contract_id: str) -> None:
         super().__init__()
@@ -73,63 +124,25 @@ class StatisticsUnitRepairFlow(ConfirmRepairFlow):
 
     async def async_step_confirm(self, user_input=None):
         if user_input is not None:
-            await _migrate_statistics(self.hass, self._contract_id)
+            await _delete_sensor_statistics(self.hass, self._contract_id)
             return self.async_create_entry(data={})
         return await super().async_step_confirm(user_input)
 
 
-async def _migrate_statistics(hass: HomeAssistant, contract_id: str) -> None:
-    """Read all statistics from old external ID and rewrite them in m³ to new sensor ID."""
-    old_statistic_id = f"{DOMAIN}:water_consumption_{contract_id}"
-    new_statistic_id = f"sensor.{DOMAIN}_water_consumption_{contract_id}"
-    recorder = get_instance(hass)
+async def _delete_sensor_statistics(hass: HomeAssistant, contract_id: str) -> None:
+    """Delete the statistics of the former water_consumption sensor, and the sensor itself from the registry."""
+    statistic_id = sensor_statistic_id(contract_id)
+    get_instance(hass).async_clear_statistics([statistic_id])
 
-    all_stats = await recorder.async_add_executor_job(
-        statistics_during_period,
-        hass,
-        datetime(1970, 1, 1),
-        None,
-        {old_statistic_id},
-        "hour",
-        None,
-        {"sum", "state"},
-    )
+    entity_registry = er.async_get(hass)
+    if entity_registry.async_get(statistic_id) is not None:
+        entity_registry.async_remove(statistic_id)
 
-    rows = all_stats.get(old_statistic_id, [])
-    if not rows:
-        return
-
-    # Legacy statistics without unit were in liters
-    unit = (await _async_get_metadata(hass, old_statistic_id))["unit_of_measurement"] or UnitOfVolume.LITERS
-    convert = VolumeConverter.converter_factory_allow_none(unit, UnitOfVolume.CUBIC_METERS)
-    converted = [
-        StatisticData(
-            start=datetime.fromtimestamp(row["start"], tz=timezone.utc) if isinstance(row["start"], (int, float)) else row["start"],
-            state=convert(row.get("state")),
-            sum=convert(row.get("sum")),
-        )
-        for row in rows
-    ]
-
-    metadata = StatisticMetaData(
-        mean_type=StatisticMeanType.NONE,
-        has_sum=True,
-        name=f"Water consumption {contract_id}",
-        source="recorder",
-        statistic_id=new_statistic_id,
-        unit_of_measurement=UnitOfVolume.CUBIC_METERS,
-        unit_class=VolumeConverter.UNIT_CLASS,
-    )
-    async_import_statistics(hass, metadata, converted)
-
-    # Delete the old external statistics
-    recorder.async_clear_statistics([old_statistic_id])
-
-    _LOGGER.info("Migrated statistics for contract %s from L to m³ (external → sensor)", contract_id)
+    _LOGGER.info("Deleted the statistics of %s, the history lives in %s", statistic_id, statistic_id_for(contract_id))
 
 
 async def async_create_fix_flow(hass: HomeAssistant, issue_id: str, data: dict | None) -> RepairsFlow:
     """Create the repair fix flow."""
-    # issue_id format: statistics_unit_liters_<contract_id>
-    contract_id = issue_id.removeprefix(f"{ISSUE_STATISTICS_UNIT_L}_")
-    return StatisticsUnitRepairFlow(contract_id)
+    # issue_id format: statistics_on_sensor_<contract_id>
+    contract_id = issue_id.removeprefix(f"{ISSUE_STATISTICS_ON_SENSOR}_")
+    return SensorStatisticsRepairFlow(contract_id)

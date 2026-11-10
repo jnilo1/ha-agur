@@ -54,13 +54,13 @@
     }
   },
   "issues": {
-    "statistics_unit_liters": {
-      "title": "Water statistics are stored in liters",
+    "statistics_on_sensor": {
+      "title": "Water statistics must be moved off the sensor",
       "fix_flow": {
         "step": {
           "confirm": {
-            "title": "Convert water statistics to cubic meters",
-            "description": "The water consumption statistics for contract **{contract_id}** are currently stored in liters (L). The Energy dashboard requires cubic meters (m³) to enable water pricing.\n\nThis will convert all historical statistics to m³ (dividing all values by 1000). This operation cannot be undone."
+            "title": "Delete the statistics of the former consumption sensor",
+            "description": "Earlier versions imported the water consumption history of contract **{contract_id}** under `{sensor_statistic_id}`. Home Assistant also compiled its own statistics for that sensor, which made the Energy dashboard show large negative and positive consumptions.\n\nThe history now lives in the external statistic `{statistic_id}` (select it as the water source of the Energy dashboard). This will delete the statistics of `{sensor_statistic_id}` and the sensor itself. The history is kept in `{statistic_id}`."
           }
         }
       }
