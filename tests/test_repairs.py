@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import partial
+from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
+    get_metadata,
     statistics_during_period,
 )
 from homeassistant.components.repairs import repairs_flow_manager
@@ -147,6 +150,40 @@ async def test_fix_flow_migrates_statistics(hass: HomeAssistant, agur_api: FakeA
     assert [s["sum"] for s in migrated] == pytest.approx([1.0, 1.1, 1.2])
     assert [s["state"] for s in migrated] == pytest.approx([0.0, 0.1, 0.2])
     assert ir.async_get(hass).async_get_issue(DOMAIN, _issue_id(CONTRACT_1)) is None
+
+
+async def test_statistics_import_does_not_use_deprecated_metadata(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """Metadata without mean_type or unit_class stops being accepted in Home Assistant 2026.11."""
+    _add_old_statistics(hass, CONTRACT_1, "L")
+    await async_wait_recording_done(hass)
+
+    with patch(
+        "homeassistant.components.recorder.statistics.report_usage"
+    ) as report_usage:
+        # Setup imports the sensor statistics (coordinator)
+        await _setup(hass, contract_ids=[CONTRACT_1])
+        assert await async_setup_component(hass, "repairs", {})
+        # The fix flow imports the migrated statistics (repairs)
+        manager = repairs_flow_manager(hass)
+        result = await manager.async_init(DOMAIN, data={"issue_id": _issue_id(CONTRACT_1)})
+        result = await manager.async_configure(result["flow_id"], {})
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        await hass.async_block_till_done()
+        await async_wait_recording_done(hass)
+
+    messages = [c.args[0] for c in report_usage.call_args_list]
+    assert not [m for m in messages if "doesn't specify" in m], messages
+
+    statistic_id = f"sensor.{DOMAIN}_water_consumption_{CONTRACT_1}"
+    metadata = await get_instance(hass).async_add_executor_job(
+        partial(get_metadata, hass, statistic_ids={statistic_id})
+    )
+    _, meta = metadata[statistic_id]
+    assert meta["mean_type"] is StatisticMeanType.NONE
+    assert meta["unit_class"] == "volume"
+    assert meta["unit_of_measurement"] == "m³"
 
 
 async def test_create_fix_flow_parses_contract_id(hass: HomeAssistant) -> None:
