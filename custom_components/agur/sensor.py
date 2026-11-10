@@ -69,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 entry_id=config_entry.entry_id,
                 entity_description=entity_description
             ))
-    async_add_entities(entities, True)
+    async_add_entities(entities)
 
 
 def build_unique_id(key: str, entry_id: str, contract_id: str) -> str:

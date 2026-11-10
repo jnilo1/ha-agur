@@ -100,3 +100,11 @@ async def test_sensors_without_data(hass: HomeAssistant, agur_api: FakeAgurApi) 
     for key in ("last_index", "water_consumption", "last_invoice"):
         assert hass.states.get(f"sensor.agur_{key}_{CONTRACT_1}").state == "unknown"
     assert "invoice_number" not in hass.states.get(f"sensor.agur_last_invoice_{CONTRACT_1}").attributes
+
+
+async def test_setup_fetches_the_data_once_per_contract(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Adding the sensors must not refresh the coordinator again right after its first refresh."""
+    await _setup(hass)
+
+    for call in ("get_data", "get_invoices", "get_contract", "get_balance"):
+        assert agur_api.calls.count(call) == 2, call
