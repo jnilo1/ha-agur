@@ -11,7 +11,7 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from requests import HTTPError
+from requests import HTTPError, Session
 
 from .agur_client import AgurClient, AgurContract, AgurDataPoint, AgurInvoice
 from .const import DOMAIN, PROVIDERS, DEFAULT_PROVIDER
@@ -92,6 +92,10 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
         self.password = password
         self.contract_ids = contract_ids
         self.import_statistics = import_statistics
+        # One HTTP session for the lifetime of the coordinator: some providers (Eau de Paris)
+        # sit behind a load balancer that sets an affinity cookie on generateToken, which
+        # every later call must carry.
+        self.http_session = Session()
 
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
 
@@ -146,6 +150,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         response = await self.hass.async_add_executor_job(client.init)
         self.session_token = response["token"]
@@ -158,6 +163,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         response = await self.hass.async_add_executor_job(client.login, self.username, self.password)
         self.auth_token = response["tokenAuthentique"]
@@ -174,6 +180,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         return await self.hass.async_add_executor_job(client.get_data, contract_id)
 
@@ -185,6 +192,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         return await self.hass.async_add_executor_job(client.get_invoices, contract_id)
 
@@ -196,6 +204,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         return await self.hass.async_add_executor_job(client.get_contract, contract_id)
 
@@ -207,6 +216,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             base_path=self.provider_config["base_path"],
             access_key=self.provider_config["access_key"],
             client_id=self.provider_config["client_id"],
+            http_session=self.http_session,
         )
         return await self.hass.async_add_executor_job(client.get_balance, contract_id)
 
@@ -218,7 +228,12 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
         statistic_id = f"sensor.{DOMAIN}_water_consumption_{contract_id}"
         recorder = get_instance(self.hass)
 
-        daily_indexes_data = coordinator_data.data_points
+        # Readings without index or date (e.g. the day of a meter swap) cannot be used
+        daily_indexes_data = [
+            p for p in coordinator_data.data_points if p.value is not None and p.date is not None
+        ]
+        if not daily_indexes_data:
+            return
         last_stats = await recorder.async_add_executor_job(
             get_last_statistics, self.hass, 1, statistic_id, True, {"sum"}
         )

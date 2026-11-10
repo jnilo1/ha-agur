@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from requests import post, get
+from requests import Session
+
+REQUEST_TIMEOUT = 30  # seconds
 
 
 class AgurContract:
@@ -56,14 +58,18 @@ class AgurInvoice:
 
 
 class AgurDataPoint:
-    value: float | None = None
+    value: float | None = None  # meter index in liters
+    volume: float | None = None  # daily consumption in liters, as computed by the provider
     date: datetime | None = None
 
     def __init__(self, json: dict[str, Any]) -> None:
-        if "valeurIndex" in json:
+        if json.get("valeurIndex") is not None:
             self.value = float(json["valeurIndex"])
 
-        if "dateReleve" in json:
+        if json.get("volumeConsoEnLitres") is not None:
+            self.volume = float(json["volumeConsoEnLitres"])
+
+        if json.get("dateReleve") is not None:
             self.date = datetime.fromisoformat(json["dateReleve"])
 
 
@@ -85,7 +91,12 @@ class AgurClient:
         base_path: str = None,
         access_key: str = None,
         client_id: str = None,
+        http_session: Session = None,
     ):
+        # The Eau de Paris API sits behind a load balancer that sets an affinity cookie on
+        # generateToken; every subsequent call must carry it or it fails randomly with
+        # "Session inconnue" / "Le token de session a expiré". Share one Session.
+        self.http = http_session if http_session is not None else Session()
         self.session_token = session_token
         self.auth_token = auth_token
         self.host = host
@@ -94,7 +105,7 @@ class AgurClient:
         self.client_id = client_id
 
     def init(self) -> dict[str, Any]:
-        response = post(f"https://{self.host}/{self.base_path}/Acces/generateToken", headers={
+        response = self.http.post(f"https://{self.host}/{self.base_path}/Acces/generateToken", headers={
             "ConversationId": self.app_id,
             "Token": self.access_key,
             "Content-Type": "application/json;charset=utf-8",
@@ -104,13 +115,13 @@ class AgurClient:
             "ConversationId": self.app_id,
             "ClientId": self.client_id,
             "AccessKey": self.access_key,
-        })
+        }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return response.json()
 
     def login(self, username, password) -> dict[str, Any]:
-        response = post(f"https://{self.host}/{self.base_path}/Utilisateur/authentification", headers={
+        response = self.http.post(f"https://{self.host}/{self.base_path}/Utilisateur/authentification", headers={
             "ConversationId": self.app_id,
             "Token": self.session_token,
             "Content-Type": "application/json;charset=utf-8",
@@ -119,64 +130,64 @@ class AgurClient:
         }, json={
             "identifiant": username,
             "motDePasse": password,
-        })
+        }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return response.json()
 
     def get_contracts(self) -> list[AgurContract]:
-        response = get(
+        response = self.http.get(
             f"https://{self.host}/{self.base_path}/Abonnement/contrats?userWebId=&recherche=&tri=NumeroContrat&triDecroissant=false&indexPage=0&nbElements=25",
             headers={
                 "ConversationId": self.app_id,
                 "User-Agent": self.user_agent,
                 "Token": self.auth_token,
-            })
+            }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return list(map(lambda contract: AgurContract(json=contract), response.json()["resultats"]))
 
     def get_contract(self, contract_id: str) -> AgurContract:
-        response = get(
+        response = self.http.get(
             f"https://{self.host}/{self.base_path}/Abonnement/detailAbonnement/{contract_id}",
             headers={
                 "ConversationId": self.app_id,
                 "User-Agent": self.user_agent,
                 "Token": self.auth_token,
-            })
+            }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return AgurContract(json=response.json())
 
     def get_data(self, contract_id) -> list[AgurDataPoint]:
-        response = get(f"https://{self.host}/{self.base_path}/Facturation/listeConsommationsFacturees/{contract_id}", headers={
+        response = self.http.get(f"https://{self.host}/{self.base_path}/Facturation/listeConsommationsFacturees/{contract_id}", headers={
             "ConversationId": self.app_id,
             "User-Agent": self.user_agent,
             "Token": self.auth_token,
-        })
+        }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return list(map(lambda json: AgurDataPoint(json=json), response.json()["resultats"]))
 
     def get_invoices(self, contract_id) -> list[AgurInvoice]:
-        response = get(
+        response = self.http.get(
             f"https://{self.host}/{self.base_path}/Facture/listeFactures?numeroContrat={contract_id}&recherche=&tri=&triDecroissant=false&indexPage=0&nbElements=25&dateDebut=&dateFin=&listeColonnes=&profondeurHistorique=-1",
             headers={
                 "ConversationId": self.app_id,
                 "User-Agent": self.user_agent,
                 "Token": self.auth_token,
-            })
+            }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return list(map(lambda json: AgurInvoice(json=json), response.json()["resultats"]))
 
     def get_balance(self, contract_id) -> float:
-        response = get(f"https://{self.host}/{self.base_path}/Facturation/soldeComptableContratAbonnement/{contract_id}",
+        response = self.http.get(f"https://{self.host}/{self.base_path}/Facturation/soldeComptableContratAbonnement/{contract_id}",
                        headers={
                            "ConversationId": self.app_id,
                            "User-Agent": self.user_agent,
                            "Token": self.auth_token,
-                       })
+                       }, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
         return float(response.json().replace('.', '').replace(',', '.'))
