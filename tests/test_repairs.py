@@ -22,6 +22,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import asy
 
 from custom_components.agur.const import DOMAIN
 from custom_components.agur.repairs import (
+    async_check_and_create_repair_issues,
     ISSUE_STATISTICS_UNIT_L,
     StatisticsUnitRepairFlow,
     _migrate_statistics,
@@ -79,12 +80,36 @@ def _issue_id(contract_id: str) -> str:
     return f"{ISSUE_STATISTICS_UNIT_L}_{contract_id}"
 
 
+async def _check(hass: HomeAssistant, contract_ids: list[str]) -> None:
+    """The check is not registered at setup in this fork (statistics stay external): call it directly."""
+    await async_check_and_create_repair_issues(hass, contract_ids)
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+
+
+async def test_setup_keeps_external_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Local choice: the statistics are external and must survive the setup (no migration, no issue)."""
+    _add_old_statistics(hass, CONTRACT_1, "m³")
+    await async_wait_recording_done(hass)
+
+    await _setup(hass, contract_ids=[CONTRACT_1])
+    await async_wait_recording_done(hass)
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, _issue_id(CONTRACT_1)) is None
+    assert await _statistics(hass, f"sensor.{DOMAIN}_water_consumption_{CONTRACT_1}") == []
+    kept = [
+        s for s in await _statistics(hass, f"{DOMAIN}:water_consumption_{CONTRACT_1}")
+        if s["start"] < datetime(2026, 2, 1, tzinfo=timezone.utc).timestamp()
+    ]
+    assert [s["sum"] for s in kept] == pytest.approx([1_000.0, 1_100.0, 1_200.0])
+
+
 @pytest.mark.parametrize("unit", ["L", None])
 async def test_issue_created_for_statistics_in_liters(hass: HomeAssistant, agur_api: FakeAgurApi, unit) -> None:
     _add_old_statistics(hass, CONTRACT_1, unit)
     await async_wait_recording_done(hass)
 
-    await _setup(hass)
+    await _check(hass, [CONTRACT_1, CONTRACT_2])
 
     issue_registry = ir.async_get(hass)
     issue = issue_registry.async_get_issue(DOMAIN, _issue_id(CONTRACT_1))
@@ -102,8 +127,7 @@ async def test_legacy_statistics_in_cubic_meters_are_moved_without_issue(
     _add_old_statistics(hass, CONTRACT_1, "m³")
     await async_wait_recording_done(hass)
 
-    await _setup(hass, contract_ids=[CONTRACT_1])
-    await async_wait_recording_done(hass)
+    await _check(hass, [CONTRACT_1])
 
     assert ir.async_get(hass).async_get_issue(DOMAIN, _issue_id(CONTRACT_1)) is None
     assert await _statistics(hass, f"{DOMAIN}:water_consumption_{CONTRACT_1}") == []
@@ -115,19 +139,26 @@ async def test_legacy_statistics_in_cubic_meters_are_moved_without_issue(
     assert [s["state"] for s in migrated] == pytest.approx([0.0, 100.0, 200.0])
 
 
-async def test_no_check_without_statistics_import(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+async def test_no_check_at_setup(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     _add_old_statistics(hass, CONTRACT_1, "L")
     await async_wait_recording_done(hass)
 
-    await _setup(hass, import_statistics=False)
+    await _setup(hass)
 
     assert ir.async_get(hass).async_get_issue(DOMAIN, _issue_id(CONTRACT_1)) is None
 
 
 async def test_fix_flow_migrates_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Legacy statistics in liters (versions <= 0.1.3) are moved to the sensor by the fix flow.
+
+    In this fork the coordinator writes its own m³ statistics under the same external id, which would
+    relabel the legacy liters as m³: the repair has to be run while the statistics import is disabled
+    (the integration must be loaded for its repair flow to be used by Home Assistant).
+    """
     _add_old_statistics(hass, CONTRACT_1, "L")
     await async_wait_recording_done(hass)
-    await _setup(hass, contract_ids=[CONTRACT_1])
+    await _setup(hass, contract_ids=[CONTRACT_1], import_statistics=False)
+    await _check(hass, [CONTRACT_1])
     assert await async_setup_component(hass, "repairs", {})
 
     manager = repairs_flow_manager(hass)
@@ -162,8 +193,8 @@ async def test_statistics_import_does_not_use_deprecated_metadata(
     with patch(
         "homeassistant.components.recorder.statistics.report_usage"
     ) as report_usage:
-        # Setup imports the sensor statistics (coordinator)
-        await _setup(hass, contract_ids=[CONTRACT_1])
+        await _setup(hass, contract_ids=[CONTRACT_1], import_statistics=False)
+        await _check(hass, [CONTRACT_1])
         assert await async_setup_component(hass, "repairs", {})
         # The fix flow imports the migrated statistics (repairs)
         manager = repairs_flow_manager(hass)

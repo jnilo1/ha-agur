@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -13,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .const import SENSOR_PLATFORM
-from .coordinator import AgurDataUpdateCoordinator
+from .coordinator import AgurDataUpdateCoordinator, statistic_id_for
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -25,14 +26,6 @@ SENSORS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.LITERS,
-    ),
-    SensorEntityDescription(
-        key="water_consumption",
-        translation_key="water_consumption",
-        icon="mdi:water",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        device_class=SensorDeviceClass.WATER,
-        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
     ),
     SensorEntityDescription(
         key="last_invoice",
@@ -60,9 +53,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     for contract_id in coordinator.contract_ids:
         _LOGGER.debug(f"Add sensor for Agur contract {contract_id}")
         for entity_description in SENSORS:
-            # Skip water_consumption sensor if statistics import is disabled
-            if entity_description.key == "water_consumption" and not coordinator.import_statistics:
-                continue
             entities.append(AgurSensor(
                 coordinator=coordinator,
                 contract_id=contract_id,
@@ -101,25 +91,6 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
         self._attr_unique_id = build_unique_id(entity_description.key, entry_id, contract_id)
         self._contract_id = contract_id
 
-        self._attr_extra_state_attributes = {
-            "contract_id": contract_id,
-            "contract_address": self.coordinator.data[contract_id].contract.address,
-            "contract_owner": self.coordinator.data[contract_id].contract.owner,
-            "meter_serial_number": self.coordinator.data[contract_id].contract.meter_serial_number,
-        }
-
-        if entity_description.key.startswith("last_"):
-            self._attr_extra_state_attributes["date"] = getattr(
-                self.coordinator.data[self._contract_id],
-                f"{self.entity_description.key}_date"
-            )
-
-        if entity_description.key == "last_invoice":
-            invoice = self.coordinator.data[contract_id].last_invoice
-            if invoice is not None:
-                self._attr_extra_state_attributes["invoice_number"] = invoice.number
-                self._attr_extra_state_attributes["payment_date"] = invoice.payment_date
-
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self.coordinator.data[contract_id].contract.meter_id)},
             name=self.coordinator.data[contract_id].contract.meter_serial_number,
@@ -127,13 +98,34 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
         )
 
     @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Computed on every read so that the dates follow the coordinator refreshes."""
+        data = self.coordinator.data[self._contract_id]
+        attributes: dict[str, Any] = {
+            "contract_id": self._contract_id,
+            "contract_address": data.contract.address,
+            "contract_owner": data.contract.owner,
+            "meter_serial_number": data.contract.meter_serial_number,
+        }
+
+        if self.entity_description.key.startswith("last_"):
+            # Actual reading / issue date, independent of the fetch time
+            attributes["date"] = getattr(data, f"{self.entity_description.key}_date")
+
+        if self.entity_description.key == "last_index" and self.coordinator.import_statistics:
+            attributes["statistic_id"] = statistic_id_for(self._contract_id)
+
+        if self.entity_description.key == "last_invoice":
+            invoice = data.last_invoice
+            if invoice is not None:
+                attributes["invoice_number"] = invoice.number
+                attributes["payment_date"] = invoice.payment_date
+
+        return attributes
+
+    @property
     def native_value(self) -> float:
         """Return the state of the sensor."""
-        if self.entity_description.key == "water_consumption":
-            # Return the latest cumulative value in cubic meters
-            data_points = self.coordinator.data[self._contract_id].data_points
-            return data_points[0].value / 1000 if data_points else None
-
         return getattr(
             self.coordinator.data[self._contract_id],
             self.entity_description.key if self.entity_description.key == "balance" else f"{self.entity_description.key}_value"

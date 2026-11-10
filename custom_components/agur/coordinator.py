@@ -9,7 +9,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
     StatisticsRow,
-    async_import_statistics,
+    async_add_external_statistics,
     get_last_statistics,
     statistics_during_period,
 )
@@ -29,6 +29,35 @@ SCAN_INTERVAL = timedelta(days=1)
 # Same rule as Home Assistant for total_increasing sensors: the index of a new meter is lower than 90% of the old one.
 # A smaller decrease is a correction of the index, not a reset.
 RESET_RATIO = 0.9
+
+
+def statistic_id_for(contract_id: str) -> str:
+    """External statistic holding the water consumption of a contract.
+
+    External statistics (`agur:...`) rather than the `sensor.agur_water_consumption_*` entity of upstream: a sensor
+    with a state_class also gets statistics compiled by the recorder from its own state (sum starting at 0 when the
+    sensor appears), which would be interleaved with the imported rows in the Energy dashboard.
+    """
+    return f"{DOMAIN}:water_consumption_{contract_id}"
+
+
+def since_latest_reset(readings: list[AgurReading]) -> list[AgurReading]:
+    """Keep only the readings of the current meter, with totals restarting at the consumption of its first reading.
+
+    Local choice: the history of the previous meter is not imported (for this account it was estimated for two
+    years while the remote reading was broken).
+    """
+    start = 0
+    for position in range(1, len(readings)):
+        if readings[position].point.value < RESET_RATIO * readings[position - 1].point.value:
+            start = position
+    if start == 0:
+        return readings
+    base = readings[start].total - readings[start].consumption
+    return [
+        AgurReading(point=r.point, consumption=r.consumption, total=r.total - base)
+        for r in readings[start:]
+    ]
 
 
 @dataclass(frozen=True)
@@ -277,10 +306,10 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             return
 
         contract_id = coordinator_data.contract.id
-        statistic_id = f"sensor.{DOMAIN}_water_consumption_{contract_id}"
+        statistic_id = statistic_id_for(contract_id)
         recorder = get_instance(self.hass)
 
-        readings = compute_consumptions(coordinator_data.data_points)
+        readings = since_latest_reset(compute_consumptions(coordinator_data.data_points))
         if not readings:
             return
         last_stats = await recorder.async_add_executor_job(
@@ -310,12 +339,12 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=f"Water consumption {contract_id}",
-            source="recorder",
+            source=DOMAIN,
             statistic_id=statistic_id,
             unit_of_measurement=UnitOfVolume.CUBIC_METERS,
             unit_class=VolumeConverter.UNIT_CLASS,
         )
-        async_import_statistics(self.hass, metadata, statistics)
+        async_add_external_statistics(self.hass, metadata, statistics)
 
     async def _async_statistics_offset(
             self,
@@ -355,9 +384,11 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             return round(last_stat["sum"] - previous[-1].total / 1000, 3)
 
         # All the readings are newer than the last statistic: the consumption in between is only known
-        # from the volume of the oldest reading, if the provider sends it
+        # from the volume of the oldest reading, if the provider sends it. When the readings start at a new
+        # meter (see since_latest_reset), its first consumption is known: the index of the new meter.
         first = readings[0]
-        return round(last_stat["sum"] - (first.total - (first.point.volume or 0)) / 1000, 3)
+        known = max(first.consumption, first.point.volume or 0)
+        return round(last_stat["sum"] - (first.total - known) / 1000, 3)
 
 
 def _statistic_start(point: AgurDataPoint) -> datetime:

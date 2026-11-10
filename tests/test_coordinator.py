@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder.models import StatisticMeanType
-from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
+from homeassistant.components.recorder.statistics import async_add_external_statistics, statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.recorder import get_instance
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
@@ -26,7 +26,7 @@ async def _setup(hass: HomeAssistant, **kwargs):
 
 
 async def _statistics(hass: HomeAssistant, contract_id: str) -> list[dict]:
-    statistic_id = f"sensor.agur_water_consumption_{contract_id}"
+    statistic_id = f"agur:water_consumption_{contract_id}"
     result = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
         hass,
@@ -197,13 +197,14 @@ async def _refresh(hass: HomeAssistant, entry) -> None:
 
 
 async def test_statistics_continue_after_meter_replacement(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
-    """A new meter starts from 0: the sum keeps increasing instead of dropping by the old index."""
+    """Only the readings of the new meter are imported (local choice), its index being the consumption since 0."""
     agur_api.data_points[CONTRACT_1][:0] = [_reading(11, 180), _reading(10, 30), _reading(9, None)]
     await _setup(hass, contract_ids=[CONTRACT_1])
 
     stats = await _statistics(hass, CONTRACT_1)
-    assert [s["sum"] for s in stats] == pytest.approx([1000, 1000.1, 1000.25, 1000.37, 1000.4, 1000.55])
-    assert [s["state"] for s in stats] == pytest.approx([0, 0.1, 0.15, 0.12, 0.03, 0.15])
+    assert [s["start"] for s in stats] == [datetime(2026, 11, d, tzinfo=TZ).timestamp() for d in (10, 11)]
+    assert [s["sum"] for s in stats] == pytest.approx([0.03, 0.18])
+    assert [s["state"] for s in stats] == pytest.approx([0.03, 0.15])
 
 
 async def test_statistics_meter_replacement_uses_the_provider_volume(
@@ -214,8 +215,9 @@ async def test_statistics_meter_replacement_uses_the_provider_volume(
     await _setup(hass, contract_ids=[CONTRACT_1])
 
     stats = await _statistics(hass, CONTRACT_1)
+    assert len(stats) == 1
     assert stats[-1]["state"] == pytest.approx(0.065)
-    assert stats[-1]["sum"] == pytest.approx(1000.435)
+    assert stats[-1]["sum"] == pytest.approx(0.065)
 
 
 async def test_statistics_small_index_decrease_is_not_a_replacement(
@@ -272,15 +274,15 @@ async def test_statistics_continue_after_a_gap(hass: HomeAssistant, agur_api: Fa
 
 
 async def test_statistics_continue_existing_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
-    """Statistics stored at other times than the readings (e.g. compiled from the sensor state) are continued."""
-    async_import_statistics(
+    """Statistics stored at other times than the readings are continued."""
+    async_add_external_statistics(
         hass,
         {
             "mean_type": StatisticMeanType.NONE,
             "has_sum": True,
             "name": None,
-            "source": "recorder",
-            "statistic_id": f"sensor.agur_water_consumption_{CONTRACT_1}",
+            "source": DOMAIN,
+            "statistic_id": f"agur:water_consumption_{CONTRACT_1}",
             "unit_class": "volume",
             "unit_of_measurement": "m³",
         },
@@ -291,3 +293,13 @@ async def test_statistics_continue_existing_statistics(hass: HomeAssistant, agur
 
     stats = await _statistics(hass, CONTRACT_1)
     assert [s["sum"] for s in stats] == pytest.approx([4999.63, 4999.73, 4999.88, 5000, 5000])
+
+
+async def test_statistics_are_external_and_no_consumption_sensor(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """The consumption lives in an external statistic only: no sensor whose state the recorder would also compile."""
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    assert hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}") is None
+    assert len(await _statistics(hass, CONTRACT_1)) == 4
+    attributes = hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes
+    assert attributes["statistic_id"] == f"agur:water_consumption_{CONTRACT_1}"

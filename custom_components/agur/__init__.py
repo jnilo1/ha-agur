@@ -10,7 +10,6 @@ from homeassistant.helpers import entity_registry as er
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
     CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION
 from .coordinator import AgurDataUpdateCoordinator
-from .repairs import async_check_and_create_repair_issues
 from .sensor import SENSORS, build_unique_id
 
 SENSOR_KEYS = {description.key for description in SENSORS}
@@ -49,10 +48,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
-    if import_statistics:
-        hass.async_create_task(
-            async_check_and_create_repair_issues(hass, contract_ids)
-        )
+    # Local choice: the upstream repair that moves `agur:water_consumption_*` statistics to the sensor (and deletes
+    # them) is not registered, since the statistics are deliberately kept as external statistics (see coordinator).
 
     config_entry.async_on_unload(config_entry.add_update_listener(async_reload_entry))
     return True
