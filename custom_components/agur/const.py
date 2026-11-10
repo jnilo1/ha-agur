@@ -3,7 +3,7 @@ from typing import Final
 
 DOMAIN: Final = "agur"
 DEFAULT_NAME: Final = "Agur"
-VERSION = 1
+VERSION = 2
 
 # Configuration and options constants
 CONF_ENABLED: str = "enabled"

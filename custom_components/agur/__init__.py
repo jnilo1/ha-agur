@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
-    CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER
+    CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION
 from .coordinator import AgurDataUpdateCoordinator
 from .repairs import async_check_and_create_repair_issues
+from .sensor import SENSORS, build_unique_id
+
+SENSOR_KEYS = {description.key for description in SENSORS}
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -51,7 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             async_check_and_create_repair_issues(hass, contract_ids)
         )
 
-    config_entry.add_update_listener(async_reload_entry)
+    config_entry.async_on_unload(config_entry.add_update_listener(async_reload_entry))
     return True
 
 
@@ -65,5 +72,59 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate an old config entry."""
+    if config_entry.version > VERSION:
+        # Downgrade from a future version: we cannot handle it
+        return False
+
+    if config_entry.version == 1:
+        contract_ids: list[str] = config_entry.options.get(CONF_CONTRACT_IDS) or []
+
+        @callback
+        def _migrate(entity_entry: er.RegistryEntry) -> dict[str, Any] | None:
+            new_unique_id = migrate_unique_id_v1(
+                unique_id=entity_entry.unique_id,
+                entity_id=entity_entry.entity_id,
+                entry_id=config_entry.entry_id,
+                contract_ids=contract_ids,
+            )
+            if new_unique_id is None:
+                return None
+            _LOGGER.debug(f"Migrating unique ID of {entity_entry.entity_id}: "
+                          f"{entity_entry.unique_id} -> {new_unique_id}")
+            return {"new_unique_id": new_unique_id}
+
+        await er.async_migrate_entries(hass, config_entry.entry_id, _migrate)
+        hass.config_entries.async_update_entry(config_entry, version=2)
+        _LOGGER.info(f"Migrated Agur config entry {config_entry.entry_id} to version 2")
+
+    return True
+
+
+def migrate_unique_id_v1(unique_id: str, entity_id: str, entry_id: str, contract_ids: list[str]) -> str | None:
+    """Compute the v2 unique ID of a sensor from its v1 one, or None if it cannot (or must not) be migrated.
+
+    In v1, unique IDs were `{key}_{entry_id}`, which collided as soon as an account had several contracts.
+    The contract is recovered from the entity ID (`sensor.agur_{key}_{contract_id}`). If the user renamed
+    the entity, we can only guess when there is a single contract; otherwise the entity is left untouched.
+    """
+    suffix = f"_{entry_id}"
+    if not unique_id.endswith(suffix):
+        return None
+    key = unique_id.removesuffix(suffix)
+    if key not in SENSOR_KEYS:
+        return None
+
+    matching = [c for c in contract_ids if entity_id.endswith(f"_{c}")]
+    if len(matching) == 1:
+        contract_id = matching[0]
+    elif not matching and len(contract_ids) == 1:
+        contract_id = contract_ids[0]
+    else:
+        return None
+
+    return build_unique_id(key, entry_id, contract_id)
