@@ -109,10 +109,6 @@ async def test_statistics_are_imported_per_contract(hass: HomeAssistant, agur_ap
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known bug, fixed in a follow-up PR: `state` indexes the original list while iterating the reversed one",
-)
 async def test_statistics_state_is_the_daily_consumption(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     await _setup(hass, contract_ids=[CONTRACT_1])
 
@@ -165,3 +161,21 @@ async def test_statistics_only_reimport_last_30_days(hass: HomeAssistant, agur_a
     stats = await _statistics(hass, CONTRACT_1)
     assert stats[0]["start"] == old.timestamp()
     assert stats[0]["sum"] == pytest.approx(900)
+
+
+async def test_statistics_state_at_the_start_of_the_reimport_window(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """The first reading re-imported is compared with the previous one, even if it is out of the window."""
+    old = datetime(2026, 9, 1, tzinfo=TZ)
+    agur_api.data_points[CONTRACT_1].append(
+        AgurDataPoint({"valeurIndex": 900_000, "dateReleve": old.isoformat()})
+    )
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["state"] for s in stats] == pytest.approx([0, 100, 0.1, 0.15, 0.12])

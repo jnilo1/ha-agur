@@ -245,16 +245,20 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
         )
 
         statistics = []
-        for index, daily_index_data in enumerate(list(reversed(daily_indexes_data))):
+        # Readings come most recent first: walk them chronologically, so that each one is compared with
+        # the reading before it (even when that previous reading is outside the re-import window)
+        previous: AgurDataPoint | None = None
+        for daily_index_data in reversed(daily_indexes_data):
+            consumption = daily_index_data.value - previous.value if previous is not None else 0
+            previous = daily_index_data
             if min_start and daily_index_data.date <= min_start:
                 continue
 
-            value_m3 = daily_index_data.value / 1000
             statistics.append(
                 StatisticData(
                     start=daily_index_data.date.replace(minute=0, second=0, microsecond=0),
-                    state=(daily_index_data.value - daily_indexes_data[index - 1].value) / 1000 if index > 0 else 0,
-                    sum=value_m3,
+                    state=consumption / 1000,
+                    sum=daily_index_data.value / 1000,
                 )
             )
 
