@@ -1,5 +1,6 @@
 {
   "name": "Agur",
   "render_readme": true,
-  "country": "FR"
+  "country": "FR",
+  "homeassistant": "2025.11.0"
 }
