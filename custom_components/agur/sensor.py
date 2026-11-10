@@ -69,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
                 entry_id=config_entry.entry_id,
                 entity_description=entity_description
             ))
-    async_add_entities(entities, True)
+    async_add_entities(entities)
 
 
 def build_unique_id(key: str, entry_id: str, contract_id: str) -> str:
@@ -112,7 +112,7 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
             self._attr_extra_state_attributes["date"] = getattr(
                 self.coordinator.data[self._contract_id],
                 f"{self.entity_description.key}_date"
-            ),
+            )
 
         if entity_description.key == "last_invoice":
             invoice = self.coordinator.data[contract_id].last_invoice

@@ -95,6 +95,26 @@ async def test_issue_created_for_statistics_in_liters(hass: HomeAssistant, agur_
     assert issue_registry.async_get_issue(DOMAIN, _issue_id(CONTRACT_2)) is None
 
 
+async def test_legacy_statistics_in_cubic_meters_are_moved_without_issue(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """Legacy statistics already converted to m³ only need moving to the sensor, keeping their values."""
+    _add_old_statistics(hass, CONTRACT_1, "m³")
+    await async_wait_recording_done(hass)
+
+    await _setup(hass, contract_ids=[CONTRACT_1])
+    await async_wait_recording_done(hass)
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, _issue_id(CONTRACT_1)) is None
+    assert await _statistics(hass, f"{DOMAIN}:water_consumption_{CONTRACT_1}") == []
+    migrated = [
+        s for s in await _statistics(hass, f"sensor.{DOMAIN}_water_consumption_{CONTRACT_1}")
+        if s["start"] < datetime(2026, 2, 1, tzinfo=timezone.utc).timestamp()
+    ]
+    assert [s["sum"] for s in migrated] == pytest.approx([1_000.0, 1_100.0, 1_200.0])
+    assert [s["state"] for s in migrated] == pytest.approx([0.0, 100.0, 200.0])
+
+
 async def test_no_check_without_statistics_import(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     _add_old_statistics(hass, CONTRACT_1, "L")
     await async_wait_recording_done(hass)
