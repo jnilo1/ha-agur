@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
     async_import_statistics,
     get_last_statistics,
@@ -15,6 +15,7 @@ from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DOMAIN
 
@@ -95,12 +96,13 @@ async def _migrate_statistics(hass: HomeAssistant, contract_id: str) -> None:
     ]
 
     metadata = StatisticMetaData(
-        has_mean=False,
+        mean_type=StatisticMeanType.NONE,
         has_sum=True,
         name=f"Water consumption {contract_id}",
         source="recorder",
         statistic_id=new_statistic_id,
         unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        unit_class=VolumeConverter.UNIT_CLASS,
     )
     async_import_statistics(hass, metadata, converted)
 

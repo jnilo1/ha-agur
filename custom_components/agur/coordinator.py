@@ -5,12 +5,13 @@ import logging
 from datetime import timedelta, datetime
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import get_last_statistics, async_import_statistics
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util.unit_conversion import VolumeConverter
 from requests import HTTPError, Session
 
 from .agur_client import AgurClient, AgurContract, AgurDataPoint, AgurInvoice
@@ -259,11 +260,12 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             )
 
         metadata = StatisticMetaData(
-            has_mean=False,
+            mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=f"Water consumption {contract_id}",
             source="recorder",
             statistic_id=statistic_id,
             unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+            unit_class=VolumeConverter.UNIT_CLASS,
         )
         async_import_statistics(self.hass, metadata, statistics)
