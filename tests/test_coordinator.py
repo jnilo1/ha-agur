@@ -4,7 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.models import StatisticMeanType
+from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.recorder import get_instance
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
@@ -179,3 +180,114 @@ async def test_statistics_state_at_the_start_of_the_reimport_window(
 
     stats = await _statistics(hass, CONTRACT_1)
     assert [s["state"] for s in stats] == pytest.approx([0, 100, 0.1, 0.15, 0.12])
+
+
+def _reading(day: int, index: float | None, volume: float | None = None) -> AgurDataPoint:
+    return AgurDataPoint({
+        "valeurIndex": index,
+        "volumeConsoEnLitres": volume,
+        "dateReleve": datetime(2026, 11, day, tzinfo=TZ).isoformat(),
+    })
+
+
+async def _refresh(hass: HomeAssistant, entry) -> None:
+    await hass.data[DOMAIN][entry.entry_id].async_refresh()
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+
+
+async def test_statistics_continue_after_meter_replacement(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """A new meter starts from 0: the sum keeps increasing instead of dropping by the old index."""
+    agur_api.data_points[CONTRACT_1][:0] = [_reading(11, 180), _reading(10, 30), _reading(9, None)]
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats] == pytest.approx([1000, 1000.1, 1000.25, 1000.37, 1000.4, 1000.55])
+    assert [s["state"] for s in stats] == pytest.approx([0, 0.1, 0.15, 0.12, 0.03, 0.15])
+
+
+async def test_statistics_meter_replacement_uses_the_provider_volume(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """The volumes sent by the provider count what the old meter used after its last reading."""
+    agur_api.data_points[CONTRACT_1][:0] = [_reading(10, 30, volume=20), _reading(9, None, volume=45)]
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    stats = await _statistics(hass, CONTRACT_1)
+    assert stats[-1]["state"] == pytest.approx(0.065)
+    assert stats[-1]["sum"] == pytest.approx(1000.435)
+
+
+async def test_statistics_small_index_decrease_is_not_a_replacement(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """The provider corrects an index a bit down: it is not a new meter, the sum follows the index."""
+    agur_api.data_points[CONTRACT_1].insert(0, _reading(9, 1_000_300))
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    stats = await _statistics(hass, CONTRACT_1)
+    assert stats[-1]["state"] == pytest.approx(-0.07)
+    assert stats[-1]["sum"] == pytest.approx(1000.3)
+
+
+async def test_statistics_continue_after_meter_replacement_with_stored_statistics(
+    hass: HomeAssistant, agur_api: FakeAgurApi
+) -> None:
+    """The meter is replaced after statistics were imported, then the old readings leave the API history."""
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+    old_readings = agur_api.data_points[CONTRACT_1]
+
+    # The new meter shows up while the old readings are still returned by the API
+    agur_api.data_points[CONTRACT_1] = [_reading(10, 130), _reading(9, 30), *old_readings]
+    await _refresh(hass, entry)
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats] == pytest.approx([1000, 1000.1, 1000.25, 1000.37, 1000.4, 1000.5])
+
+    # Later, the API only returns readings of the new meter: the stored sums are kept and continued
+    agur_api.data_points[CONTRACT_1] = [_reading(11, 200), _reading(10, 130), _reading(9, 30)]
+    await _refresh(hass, entry)
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats] == pytest.approx([1000, 1000.1, 1000.25, 1000.37, 1000.4, 1000.5, 1000.57])
+
+    # Refreshing again changes nothing
+    await _refresh(hass, entry)
+    assert await _statistics(hass, CONTRACT_1) == stats
+
+
+async def test_statistics_continue_after_a_gap(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """No update for a while: the readings sent by the API are all newer than the stored statistics."""
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+
+    # The new meter was installed in the meantime, the provider gives the volume used since the last reading
+    agur_api.data_points[CONTRACT_1] = [_reading(20, 100), _reading(19, 40, volume=60)]
+    await _refresh(hass, entry)
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats][-3:] == pytest.approx([1000.37, 1000.43, 1000.49])
+
+    # Same without volume: the sum does not drop, what was used before the first reading is unknown
+    agur_api.data_points[CONTRACT_1] = [_reading(28, 300), _reading(27, 250)]
+    await _refresh(hass, entry)
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats][-3:] == pytest.approx([1000.49, 1000.49, 1000.54])
+
+
+async def test_statistics_continue_existing_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Statistics stored at other times than the readings (e.g. compiled from the sensor state) are continued."""
+    async_import_statistics(
+        hass,
+        {
+            "mean_type": StatisticMeanType.NONE,
+            "has_sum": True,
+            "name": None,
+            "source": "recorder",
+            "statistic_id": f"sensor.agur_water_consumption_{CONTRACT_1}",
+            "unit_class": "volume",
+            "unit_of_measurement": "m³",
+        },
+        [{"start": datetime(2026, 11, 8, 6, tzinfo=TZ), "state": 0, "sum": 5000}],
+    )
+    await async_wait_recording_done(hass)
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    stats = await _statistics(hass, CONTRACT_1)
+    assert [s["sum"] for s in stats] == pytest.approx([4999.63, 4999.73, 4999.88, 5000, 5000])
