@@ -66,10 +66,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
             entities.append(AgurSensor(
                 coordinator=coordinator,
                 contract_id=contract_id,
-                unique_id=config_entry.entry_id,
+                entry_id=config_entry.entry_id,
                 entity_description=entity_description
             ))
     async_add_entities(entities, True)
+
+
+def build_unique_id(key: str, entry_id: str, contract_id: str) -> str:
+    """Build the unique ID of a sensor.
+
+    It must include the contract ID: a single config entry (account) can hold several contracts,
+    each of them exposing the same set of sensors.
+    """
+    return f"{key}_{entry_id}_{contract_id}"
 
 
 class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
@@ -79,7 +88,7 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
     def __init__(
             self,
             coordinator: AgurDataUpdateCoordinator,
-            unique_id: str,
+            entry_id: str,
             contract_id: str,
             entity_description: SensorEntityDescription
     ) -> None:
@@ -89,7 +98,7 @@ class AgurSensor(CoordinatorEntity[AgurDataUpdateCoordinator], SensorEntity):
         self.entity_description = entity_description
 
         self.entity_id = f"{SENSOR_PLATFORM}.{DOMAIN}_{entity_description.key}_{contract_id}"
-        self._attr_unique_id = f"{entity_description.key}_{unique_id}"
+        self._attr_unique_id = build_unique_id(entity_description.key, entry_id, contract_id)
         self._contract_id = contract_id
 
         self._attr_extra_state_attributes = {
