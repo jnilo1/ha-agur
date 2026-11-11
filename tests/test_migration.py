@@ -10,7 +10,7 @@ from custom_components.agur import async_migrate_entry, migrate_unique_id_v1
 
 from .conftest import CONTRACT_1, CONTRACT_2, ENTRY_ID, FakeAgurApi, make_entry
 
-KEYS = ["last_index", "water_consumption", "last_invoice", "balance"]
+KEYS = ["last_index", "last_invoice", "balance"]
 
 
 def _register_v1(entity_registry: er.EntityRegistry, entry, key: str, object_id: str) -> er.RegistryEntry:
@@ -86,7 +86,6 @@ async def test_migrate_two_contracts_as_in_issue_6(hass: HomeAssistant, agur_api
     entry.add_to_hass(hass)
     entity_registry = er.async_get(hass)
     survivors = {
-        "water_consumption": CONTRACT_1,
         "last_invoice": CONTRACT_1,
         "balance": CONTRACT_1,
         "last_index": CONTRACT_2,
@@ -147,3 +146,18 @@ async def test_async_migrate_entry_guards(hass: HomeAssistant, version: int, exp
 
     assert await async_migrate_entry(hass, entry) is expected
     assert entry.version == version
+
+
+async def test_migrate_leaves_former_consumption_sensor_to_the_repair(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """The water_consumption sensor no longer exists: its registry entry is left to the repair flow, not recreated."""
+    entry = make_entry(contract_ids=[CONTRACT_1], version=1)
+    entry.add_to_hass(hass)
+    entity_registry = er.async_get(hass)
+    legacy = _register_v1(entity_registry, entry, "water_consumption", f"agur_water_consumption_{CONTRACT_1}")
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entity_registry.async_get(legacy.entity_id).unique_id == legacy.unique_id
+    assert hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}") is None

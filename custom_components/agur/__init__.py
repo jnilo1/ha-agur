@@ -10,7 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
     CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION
 from .coordinator import AgurDataUpdateCoordinator
-from .repairs import async_check_and_create_repair_issues
+from .repairs import async_check_and_create_repair_issues, async_convert_legacy_statistics
 from .sensor import SENSORS, build_unique_id
 
 SENSOR_KEYS = {description.key for description in SENSORS}
@@ -43,6 +43,9 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         contract_ids=contract_ids,
         import_statistics=import_statistics
     )
+    if import_statistics:
+        # Before the first import, which writes in m³ under the same statistic id
+        await async_convert_legacy_statistics(hass, contract_ids)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][config_entry.entry_id] = coordinator

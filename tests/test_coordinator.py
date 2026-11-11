@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder.models import StatisticMeanType
-from homeassistant.components.recorder.statistics import async_import_statistics, statistics_during_period
+from homeassistant.components.recorder.statistics import async_add_external_statistics, statistics_during_period
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.recorder import get_instance
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
@@ -26,7 +26,7 @@ async def _setup(hass: HomeAssistant, **kwargs):
 
 
 async def _statistics(hass: HomeAssistant, contract_id: str) -> list[dict]:
-    statistic_id = f"sensor.agur_water_consumption_{contract_id}"
+    statistic_id = f"agur:water_consumption_{contract_id}"
     result = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
         hass,
@@ -272,15 +272,15 @@ async def test_statistics_continue_after_a_gap(hass: HomeAssistant, agur_api: Fa
 
 
 async def test_statistics_continue_existing_statistics(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
-    """Statistics stored at other times than the readings (e.g. compiled from the sensor state) are continued."""
-    async_import_statistics(
+    """Statistics stored at other times than the readings are continued."""
+    async_add_external_statistics(
         hass,
         {
             "mean_type": StatisticMeanType.NONE,
             "has_sum": True,
             "name": None,
-            "source": "recorder",
-            "statistic_id": f"sensor.agur_water_consumption_{CONTRACT_1}",
+            "source": DOMAIN,
+            "statistic_id": f"agur:water_consumption_{CONTRACT_1}",
             "unit_class": "volume",
             "unit_of_measurement": "m³",
         },
@@ -291,3 +291,13 @@ async def test_statistics_continue_existing_statistics(hass: HomeAssistant, agur
 
     stats = await _statistics(hass, CONTRACT_1)
     assert [s["sum"] for s in stats] == pytest.approx([4999.63, 4999.73, 4999.88, 5000, 5000])
+
+
+async def test_statistics_are_external(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """The history lives in an external statistic only: no sensor whose state the recorder would also compile."""
+    await _setup(hass, contract_ids=[CONTRACT_1])
+
+    assert hass.states.get(f"sensor.agur_water_consumption_{CONTRACT_1}") is None
+    assert len(await _statistics(hass, CONTRACT_1)) == 4
+    attributes = hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes
+    assert attributes["statistic_id"] == f"agur:water_consumption_{CONTRACT_1}"

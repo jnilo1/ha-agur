@@ -12,7 +12,7 @@ from custom_components.agur.const import CONF_CONTRACT_IDS, CONF_IMPORT_STATISTI
 
 from .conftest import CONTRACT_1, CONTRACT_2, ENTRY_ID, FakeAgurApi, make_entry
 
-KEYS = ["last_index", "water_consumption", "last_invoice", "balance"]
+KEYS = ["last_index", "last_invoice", "balance"]
 
 
 async def _setup(hass: HomeAssistant, entry) -> None:

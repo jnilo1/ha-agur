@@ -9,7 +9,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
     StatisticsRow,
-    async_import_statistics,
+    async_add_external_statistics,
     get_last_statistics,
     statistics_during_period,
 )
@@ -29,6 +29,19 @@ SCAN_INTERVAL = timedelta(days=1)
 # Same rule as Home Assistant for total_increasing sensors: the index of a new meter is lower than 90% of the old one.
 # A smaller decrease is a correction of the index, not a reset.
 RESET_RATIO = 0.9
+
+
+def statistic_id_for(contract_id: str) -> str:
+    """Id of the external statistic holding the water consumption history of a contract.
+
+    The history is imported as an external statistic (`agur:...`), not under a sensor entity: the recorder
+    compiles its own statistics for every sensor with a state_class, with a sum starting at 0 when the sensor
+    appears. Written under the same statistic id, those hourly rows get interleaved with the imported ones
+    (whose sum is the meter total), and the Energy dashboard, which reads the differences between consecutive
+    sums, shows a drop of the whole total followed by jumps of the same size. External statistics are a
+    supported water source of the Energy dashboard, and keep the real reading dates.
+    """
+    return f"{DOMAIN}:water_consumption_{contract_id}"
 
 
 @dataclass(frozen=True)
@@ -277,7 +290,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             return
 
         contract_id = coordinator_data.contract.id
-        statistic_id = f"sensor.{DOMAIN}_water_consumption_{contract_id}"
+        statistic_id = statistic_id_for(contract_id)
         recorder = get_instance(self.hass)
 
         readings = compute_consumptions(coordinator_data.data_points)
@@ -310,12 +323,12 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=f"Water consumption {contract_id}",
-            source="recorder",
+            source=DOMAIN,
             statistic_id=statistic_id,
             unit_of_measurement=UnitOfVolume.CUBIC_METERS,
             unit_class=VolumeConverter.UNIT_CLASS,
         )
-        async_import_statistics(self.hass, metadata, statistics)
+        async_add_external_statistics(self.hass, metadata, statistics)
 
     async def _async_statistics_offset(
             self,

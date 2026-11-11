@@ -54,13 +54,13 @@
     }
   },
   "issues": {
-    "statistics_unit_liters": {
-      "title": "Les statistiques d'eau sont stockées en litres",
+    "statistics_on_sensor": {
+      "title": "Les statistiques d'eau doivent quitter le capteur",
       "fix_flow": {
         "step": {
           "confirm": {
-            "title": "Convertir les statistiques d'eau en mètres cubes",
-            "description": "Les statistiques de consommation d'eau pour le contrat **{contract_id}** sont actuellement stockées en litres (L). Le tableau de bord Énergie nécessite des mètres cubes (m³) pour activer la tarification de l'eau.\n\nCette opération va convertir tout l'historique en m³ (en divisant toutes les valeurs par 1000). Cette opération est irréversible."
+            "title": "Supprimer les statistiques de l'ancien capteur de consommation",
+            "description": "Les versions précédentes importaient l'historique de consommation d'eau du contrat **{contract_id}** sous `{sensor_statistic_id}`. Home Assistant compilait aussi ses propres statistiques pour ce capteur, ce qui faisait apparaître de fortes consommations négatives et positives dans le tableau de bord Énergie.\n\nL'historique est désormais dans la statistique externe `{statistic_id}` (à sélectionner comme source d'eau du tableau de bord Énergie). Cette opération supprime les statistiques de `{sensor_statistic_id}` ainsi que le capteur. L'historique est conservé dans `{statistic_id}`."
           }
         }
       }

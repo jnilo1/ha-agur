@@ -73,9 +73,13 @@ All 3 sensors also have attributes for easy automation consumption
 
 ## Statistiques
 
-Si vous avez coché l'option `Importer les statistiques pour les abonnements sélectionnés`, les données de consommation
-des 3 dernières années seront alors importées dans le tableau de bord `Energie` de Home Assistant. Ces données seront
-complétées avec la consommation  journalière aussi longtemps que l'intégration sera activée.
+Si vous avez coché l'option `Importer les statistiques pour les abonnements sélectionnés`, l'historique de consommation
+(environ 3 ans) est importé dans la statistique externe `agur:water_consumption_<numéro de contrat>` (en m³), puis
+complété chaque jour, aux dates réelles de relevé. Sélectionnez cette statistique comme source d'eau du tableau de bord
+`Énergie` (son identifiant figure aussi dans l'attribut `statistic_id` de `sensor.agur_last_index_<numéro de contrat>`).
+
+L'historique n'est volontairement pas rattaché à un capteur : Home Assistant compile ses propres statistiques pour tout
+capteur doté d'un `state_class`, et elles se mélangeraient aux statistiques importées.
 
 > [!NOTE]
 > L'API retourne les données de consommation avec 24 ou 48 heures de délais et ces données ne sont mises à jour qu'une 
