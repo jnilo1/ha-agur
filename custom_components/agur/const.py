@@ -13,6 +13,12 @@ CONF_CONTRACT_IDS: str = "contract_ids"
 CONF_IMPORT_STATISTICS: str = "import_statistics"
 CONF_PROVIDER: str = "provider"
 
+# Price subentries: one per price period of a contract
+SUBENTRY_TYPE_PRICE: str = "price"
+CONF_CONTRACT_ID: str = "contract_id"
+CONF_START_DATE: str = "start_date"
+CONF_PRICE: str = "price"
+
 # Provider configuration
 DEFAULT_PROVIDER: str = "ael"
 

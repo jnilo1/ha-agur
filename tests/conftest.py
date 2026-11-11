@@ -165,6 +165,7 @@ def make_entry(
     import_statistics: bool = True,
     version: int = VERSION,
     entry_id: str = ENTRY_ID,
+    subentries_data: list[dict[str, Any]] | None = None,
 ) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
@@ -177,4 +178,5 @@ def make_entry(
             CONF_CONTRACT_IDS: list(CONTRACTS if contract_ids is None else contract_ids),
             CONF_IMPORT_STATISTICS: import_statistics,
         },
+        subentries_data=subentries_data,
     )

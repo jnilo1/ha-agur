@@ -78,11 +78,45 @@ every day, with the actual reading dates. Select that statistic as the water sou
 also given by the `statistic_id` attribute of `sensor.agur_last_index_<contract_id>`).
 
 The history is deliberately not attached to a sensor: Home Assistant compiles its own statistics for every sensor with a
-`state_class`, and they would be mixed with the imported ones.
+`state_class`, and they would be mixed with the imported ones. See [the decision record](docs/adr/0001-external-statistics-for-consumption-and-cost.md) for the details.
 
 > [!NOTE]
 > The API returns data up to 24 or 48 hours before the actual date, and only once a day. It's unfortunately impossible
 > to get a more granular statistics
+
+### Water cost
+
+The Agur API does not give the price of water, so you enter it yourself. The cost of each reading (its consumption
+times the price in force on its date) is then imported as the external statistic `agur:water_cost_<contract_id>`
+(in €), which the `Energy dashboard` can display next to the consumption.
+
+#### Set the price
+
+1. Go to `Settings` > `Devices & services` > `Agur`.
+2. Click `Add price`, at the top of the page, next to `Add entry`.
+3. Fill in:
+   - `Contract`: only asked if your account has several contracts.
+   - `Start date`: the first day the price applies.
+   - `Price per m³`: including tax and excluding the subscription, as written on your invoice (e.g. `4.23`).
+4. Submit. The price is listed under your account on the same page, where you can change or delete it.
+
+A price applies from its start date until the next price of the same contract: add a new one when the tariff changes,
+usually once a year, rather than editing the previous one. Each time a price is added, changed or deleted, the cost is
+recomputed for the whole history sent by the API, so a price entered late still applies from its start date. Readings
+before the first price of a contract have no cost.
+
+#### Display it on the Energy dashboard
+
+1. Go to `Settings` > `Dashboards` > `Energy`, then the `Water` tab.
+2. Under `Water consumption`, click `Add water source` (or the pencil of the existing source).
+3. In `Water consumption`, select `Water consumption <contract_id>` (source `Agur`).
+4. Under the cost options, choose `Use an entity tracking the total costs`, then select `Water cost <contract_id>`
+   (source `Agur`) in `Entity with the total costs`.
+5. Save. The cost appears in the `Energy` dashboard, in the water and cost cards.
+
+> [!NOTE]
+> `Use a static price` and `Use an entity with the current price` are not suited here: Home Assistant only applies them
+> to changes of a sensor, so they would not price the history, nor the corrections made by the provider.
 
 ## Languages
 

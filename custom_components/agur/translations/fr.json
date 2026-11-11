@@ -53,6 +53,51 @@
       "unknown": "Erreur inattendue"
     }
   },
+  "config_subentries": {
+    "price": {
+      "entry_type": "Prix",
+      "initiate_flow": {
+        "user": "Ajouter un prix",
+        "reconfigure": "Modifier le prix"
+      },
+      "step": {
+        "user": {
+          "title": "Ajouter un prix de l'eau",
+          "description": "Prix du m³ d'eau, TTC et hors abonnement, tel qu'indiqué sur votre facture. Il s'applique de la date de début jusqu'au prix suivant de l'abonnement, et sert à calculer la statistique de coût de l'eau.",
+          "data": {
+            "contract_id": "Abonnement",
+            "start_date": "Date de début",
+            "price": "Prix du m³"
+          },
+          "data_description": {
+            "contract_id": "L'abonnement auquel ce prix s'applique.",
+            "start_date": "Le premier jour où ce prix s'applique. Les relevés antérieurs au premier prix d'un abonnement n'ont pas de coût.",
+            "price": "TTC, hors abonnement."
+          }
+        },
+        "reconfigure": {
+          "title": "Modifier un prix de l'eau",
+          "description": "Prix du m³ d'eau, TTC et hors abonnement, tel qu'indiqué sur votre facture. Il s'applique de la date de début jusqu'au prix suivant de l'abonnement, et sert à calculer la statistique de coût de l'eau.",
+          "data": {
+            "contract_id": "Abonnement",
+            "start_date": "Date de début",
+            "price": "Prix du m³"
+          },
+          "data_description": {
+            "contract_id": "L'abonnement auquel ce prix s'applique.",
+            "start_date": "Le premier jour où ce prix s'applique. Les relevés antérieurs au premier prix d'un abonnement n'ont pas de coût.",
+            "price": "TTC, hors abonnement."
+          }
+        }
+      },
+      "error": {
+        "duplicate_start_date": "Un prix commence déjà à cette date pour cet abonnement."
+      },
+      "abort": {
+        "no_contracts": "Sélectionnez d'abord au moins un abonnement dans les options de l'intégration."
+      }
+    }
+  },
   "issues": {
     "statistics_on_sensor": {
       "title": "Les statistiques d'eau doivent quitter le capteur",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -8,8 +9,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
-    CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION
-from .coordinator import AgurDataUpdateCoordinator
+    CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION, SUBENTRY_TYPE_PRICE, CONF_CONTRACT_ID, \
+    CONF_START_DATE, CONF_PRICE
+from .coordinator import AgurDataUpdateCoordinator, PricePeriod
 from .repairs import async_check_and_create_repair_issues, async_convert_legacy_statistics
 from .sensor import SENSORS, build_unique_id
 
@@ -41,7 +43,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         username=username,
         password=password,
         contract_ids=contract_ids,
-        import_statistics=import_statistics
+        import_statistics=import_statistics,
+        price_periods=price_periods_from(config_entry),
     )
     if import_statistics:
         # Before the first import, which writes in m³ under the same statistic id
@@ -59,6 +62,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     config_entry.async_on_unload(config_entry.add_update_listener(async_reload_entry))
     return True
+
+
+def price_periods_from(config_entry: ConfigEntry) -> dict[str, list[PricePeriod]]:
+    """Return the price periods of each contract, from the price subentries."""
+    periods: dict[str, list[PricePeriod]] = {}
+    for subentry in config_entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_TYPE_PRICE:
+            continue
+        periods.setdefault(subentry.data[CONF_CONTRACT_ID], []).append(PricePeriod(
+            start=date.fromisoformat(subentry.data[CONF_START_DATE]),
+            price=float(subentry.data[CONF_PRICE]),
+        ))
+    return periods
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
