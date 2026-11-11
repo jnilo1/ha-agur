@@ -7,6 +7,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.agur.agur_client import AgurDataPoint
 from custom_components.agur.sensor import build_unique_id
 
 from .conftest import CONTRACT_1, CONTRACT_2, ENTRY_ID, TZ, FakeAgurApi, make_entry
@@ -102,3 +103,20 @@ async def test_setup_fetches_the_data_once_per_contract(hass: HomeAssistant, agu
 
     for call in ("get_data", "get_invoices", "get_contract", "get_balance"):
         assert agur_api.calls.count(call) == 2, call
+
+
+async def test_sensor_attributes_follow_refreshes(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Local choice: the reading date is not frozen at setup, it follows the data fetched by the coordinator."""
+    await _setup(hass, contract_ids=[CONTRACT_1])
+    assert hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes["date"] == datetime(2026, 11, 8, tzinfo=TZ)
+
+    agur_api.data_points[CONTRACT_1].insert(
+        0, AgurDataPoint({"valeurIndex": 1_000_500, "dateReleve": "2026-11-09T00:00:00+01:00"})
+    )
+    entry = hass.config_entries.async_entries("agur")[0]
+    await hass.data["agur"][entry.entry_id].async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}")
+    assert float(state.state) == 1_000_500
+    assert state.attributes["date"] == datetime(2026, 11, 9, tzinfo=TZ)
