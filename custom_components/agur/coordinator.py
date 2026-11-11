@@ -64,6 +64,25 @@ def price_at(periods: list[PricePeriod], day: date) -> float | None:
     return max(in_force, key=lambda p: p.start).price if in_force else None
 
 
+def since_latest_reset(readings: list[AgurReading]) -> list[AgurReading]:
+    """Keep only the readings of the current meter, with totals restarting at the consumption of its first reading.
+
+    Local choice: the history of the previous meter is not imported (for this account it was estimated for two
+    years while the remote reading was broken). The cost statistic is computed from the same readings.
+    """
+    start = 0
+    for position in range(1, len(readings)):
+        if readings[position].point.value < RESET_RATIO * readings[position - 1].point.value:
+            start = position
+    if start == 0:
+        return readings
+    base = readings[start].total - readings[start].consumption
+    return [
+        AgurReading(point=r.point, consumption=r.consumption, total=r.total - base)
+        for r in readings[start:]
+    ]
+
+
 @dataclass(frozen=True)
 class AgurReading:
     """A meter reading, with the consumption since the previous one and the total consumption, both in liters."""
@@ -315,7 +334,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
         statistic_id = statistic_id_for(contract_id)
         recorder = get_instance(self.hass)
 
-        readings = compute_consumptions(coordinator_data.data_points)
+        readings = since_latest_reset(compute_consumptions(coordinator_data.data_points))
         if not readings:
             return
         last_stats = await recorder.async_add_executor_job(
@@ -458,9 +477,11 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             return round(last_stat["sum"] - previous[-1].total / 1000, 3)
 
         # All the readings are newer than the last statistic: the consumption in between is only known
-        # from the volume of the oldest reading, if the provider sends it
+        # from the volume of the oldest reading, if the provider sends it. When the readings start at a new
+        # meter (see since_latest_reset), its first consumption is known: the index of the new meter.
         first = readings[0]
-        return round(last_stat["sum"] - (first.total - (first.point.volume or 0)) / 1000, 3)
+        known = max(first.consumption, first.point.volume or 0)
+        return round(last_stat["sum"] - (first.total - known) / 1000, 3)
 
 
 def _statistic_start(point: AgurDataPoint) -> datetime:

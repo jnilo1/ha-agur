@@ -197,13 +197,14 @@ async def _refresh(hass: HomeAssistant, entry) -> None:
 
 
 async def test_statistics_continue_after_meter_replacement(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
-    """A new meter starts from 0: the sum keeps increasing instead of dropping by the old index."""
+    """Only the readings of the new meter are imported (local choice), its index being the consumption since 0."""
     agur_api.data_points[CONTRACT_1][:0] = [_reading(11, 180), _reading(10, 30), _reading(9, None)]
     await _setup(hass, contract_ids=[CONTRACT_1])
 
     stats = await _statistics(hass, CONTRACT_1)
-    assert [s["sum"] for s in stats] == pytest.approx([1000, 1000.1, 1000.25, 1000.37, 1000.4, 1000.55])
-    assert [s["state"] for s in stats] == pytest.approx([0, 0.1, 0.15, 0.12, 0.03, 0.15])
+    assert [s["start"] for s in stats] == [datetime(2026, 11, d, tzinfo=TZ).timestamp() for d in (10, 11)]
+    assert [s["sum"] for s in stats] == pytest.approx([0.03, 0.18])
+    assert [s["state"] for s in stats] == pytest.approx([0.03, 0.15])
 
 
 async def test_statistics_meter_replacement_uses_the_provider_volume(
@@ -214,8 +215,9 @@ async def test_statistics_meter_replacement_uses_the_provider_volume(
     await _setup(hass, contract_ids=[CONTRACT_1])
 
     stats = await _statistics(hass, CONTRACT_1)
+    assert len(stats) == 1
     assert stats[-1]["state"] == pytest.approx(0.065)
-    assert stats[-1]["sum"] == pytest.approx(1000.435)
+    assert stats[-1]["sum"] == pytest.approx(0.065)
 
 
 async def test_statistics_small_index_decrease_is_not_a_replacement(

@@ -304,3 +304,16 @@ async def test_price_flow_without_contracts(hass: HomeAssistant, agur_api: FakeA
     result = await _start_price_flow(hass, entry)
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_contracts"
+
+
+async def test_cost_only_covers_the_current_meter(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """Local choice: the cost follows the consumption statistic, which only holds the readings of the new meter."""
+    from custom_components.agur.agur_client import AgurDataPoint
+
+    agur_api.data_points[CONTRACT_1][:0] = [
+        AgurDataPoint({"valeurIndex": index, "dateReleve": day(d).isoformat()})
+        for d, index in ((11, 180), (10, 30), (9, None))
+    ]
+    await _setup(hass, [price(CONTRACT_1, "2026-01-01", 2.0)], contract_ids=[CONTRACT_1])
+
+    assert await _costs(hass) == [(day(10), 0.06, 0.06), (day(11), 0.3, 0.36)]
