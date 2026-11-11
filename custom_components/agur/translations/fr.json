@@ -100,7 +100,7 @@
   },
   "issues": {
     "statistics_on_sensor": {
-      "title": "Les statistiques d'eau doivent quitter le capteur",
+      "title": "Les statistiques d'eau doivent être corrigées",
       "fix_flow": {
         "step": {
           "confirm": {
