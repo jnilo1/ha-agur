@@ -53,6 +53,51 @@
       "unknown": "Unexpected error"
     }
   },
+  "config_subentries": {
+    "price": {
+      "entry_type": "Price",
+      "initiate_flow": {
+        "user": "Add price",
+        "reconfigure": "Change price"
+      },
+      "step": {
+        "user": {
+          "title": "Add a water price",
+          "description": "Price per m³ of water, including tax and excluding the subscription, as written on your invoice. It applies from the start date until the next price of the contract, and is used to compute the water cost statistic.",
+          "data": {
+            "contract_id": "Contract",
+            "start_date": "Start date",
+            "price": "Price per m³"
+          },
+          "data_description": {
+            "contract_id": "The contract this price applies to.",
+            "start_date": "The first day this price applies. Readings before the first price of a contract have no cost.",
+            "price": "Including tax, excluding the subscription."
+          }
+        },
+        "reconfigure": {
+          "title": "Change a water price",
+          "description": "Price per m³ of water, including tax and excluding the subscription, as written on your invoice. It applies from the start date until the next price of the contract, and is used to compute the water cost statistic.",
+          "data": {
+            "contract_id": "Contract",
+            "start_date": "Start date",
+            "price": "Price per m³"
+          },
+          "data_description": {
+            "contract_id": "The contract this price applies to.",
+            "start_date": "The first day this price applies. Readings before the first price of a contract have no cost.",
+            "price": "Including tax, excluding the subscription."
+          }
+        }
+      },
+      "error": {
+        "duplicate_start_date": "A price already starts on this date for this contract."
+      },
+      "abort": {
+        "no_contracts": "Select at least one contract in the integration options first."
+      }
+    }
+  },
   "issues": {
     "statistics_on_sensor": {
       "title": "Water statistics must be moved off the sensor",

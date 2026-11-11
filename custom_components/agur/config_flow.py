@@ -8,13 +8,24 @@ from homeassistant import config_entries, exceptions
 from homeassistant.core import callback, HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation
-from homeassistant.helpers.selector import TextSelector, TextSelectorType, TextSelectorConfig
+from homeassistant.helpers.selector import (
+    DateSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 from requests import Session
 from voluptuous import Schema
 
 from .agur_client import AgurClient
 from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, VERSION, CONF_CONTRACT_IDS, CONF_IMPORT_STATISTICS, \
-    CONF_PROVIDER, DEFAULT_PROVIDER, PROVIDERS
+    CONF_PROVIDER, DEFAULT_PROVIDER, PROVIDERS, SUBENTRY_TYPE_PRICE, CONF_CONTRACT_ID, CONF_START_DATE, CONF_PRICE
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 AUTH_TOKEN = "auth"
@@ -235,6 +246,14 @@ class AgurConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Get the options flow for this handler."""
         return AgurOptionFlow(config_entry)
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+            cls, config_entry: config_entries.ConfigEntry
+    ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
+        """Return the subentries supported by this integration: the price periods of the contracts."""
+        return {SUBENTRY_TYPE_PRICE: PriceSubentryFlow}
+
 
 class AgurOptionFlow(config_entries.OptionsFlow):
     """Handle an option flow for Agur."""
@@ -312,6 +331,78 @@ class AgurOptionFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
         )
+
+
+class PriceSubentryFlow(config_entries.ConfigSubentryFlow):
+    """Add or change a price period of a contract: a price per m³ in force from a start date."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> config_entries.SubentryFlowResult:
+        """Add a price period."""
+        return await self._async_step_price("user", user_input, None)
+
+    async def async_step_reconfigure(
+            self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.SubentryFlowResult:
+        """Change a price period."""
+        return await self._async_step_price("reconfigure", user_input, self._get_reconfigure_subentry())
+
+    async def _async_step_price(
+            self,
+            step_id: str,
+            user_input: dict[str, Any] | None,
+            subentry: config_entries.ConfigSubentry | None,
+    ) -> config_entries.SubentryFlowResult:
+        entry = self._get_entry()
+        contract_ids: list[str] = list(entry.options.get(CONF_CONTRACT_IDS) or [])
+        if not contract_ids:
+            return self.async_abort(reason="no_contracts")
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {
+                # The contract is only asked when there are several
+                CONF_CONTRACT_ID: user_input.get(CONF_CONTRACT_ID, contract_ids[0]),
+                CONF_START_DATE: user_input[CONF_START_DATE],
+                CONF_PRICE: float(user_input[CONF_PRICE]),
+            }
+            unique_id = f"{data[CONF_CONTRACT_ID]}_{data[CONF_START_DATE]}"
+            if any(
+                other.unique_id == unique_id and (subentry is None or other.subentry_id != subentry.subentry_id)
+                for other in entry.subentries.values()
+            ):
+                errors[CONF_START_DATE] = "duplicate_start_date"
+            else:
+                title = price_title(self.hass, data, with_contract=len(contract_ids) > 1)
+                if subentry is None:
+                    return self.async_create_entry(title=title, data=data, unique_id=unique_id)
+                return self.async_update_and_abort(entry, subentry, title=title, data=data, unique_id=unique_id)
+
+        defaults: dict[str, Any] = dict(subentry.data) if subentry is not None else {}
+        defaults.update(user_input or {})
+        fields: dict[Any, Any] = {}
+        if len(contract_ids) > 1:
+            fields[vol.Required(CONF_CONTRACT_ID, default=defaults.get(CONF_CONTRACT_ID, contract_ids[0]))] = \
+                SelectSelector(SelectSelectorConfig(options=contract_ids, mode=SelectSelectorMode.DROPDOWN))
+        fields[vol.Required(CONF_START_DATE, **_default(defaults, CONF_START_DATE))] = DateSelector()
+        fields[vol.Required(CONF_PRICE, **_default(defaults, CONF_PRICE))] = NumberSelector(
+            NumberSelectorConfig(min=0, step="any", mode=NumberSelectorMode.BOX, unit_of_measurement="€/m³")
+        )
+        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields), errors=errors)
+
+
+def _default(defaults: dict[str, Any], key: str) -> dict[str, Any]:
+    return {"default": defaults[key]} if key in defaults else {}
+
+
+def price_title(hass: HomeAssistant, data: dict[str, Any], with_contract: bool) -> str:
+    """Title of a price subentry, as listed under the config entry. Subentry titles are not translated: it is
+    written once, in the language of Home Assistant."""
+    price = format(data[CONF_PRICE], "g")
+    if hass.config.language.startswith("fr"):
+        title = f"{price.replace('.', ',')} €/m³ depuis le {data[CONF_START_DATE]}"
+    else:
+        title = f"{price} €/m³ from {data[CONF_START_DATE]}"
+    return f"{data[CONF_CONTRACT_ID]} · {title}" if with_contract else title
 
 
 class ConfigError(exceptions.HomeAssistantError):

@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import timedelta, datetime
+from datetime import date, datetime, timedelta, timezone
+from math import isclose
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMeanType, StatisticMetaData
@@ -13,7 +14,7 @@ from homeassistant.components.recorder.statistics import (
     get_last_statistics,
     statistics_during_period,
 )
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import CURRENCY_EURO, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -42,6 +43,25 @@ def statistic_id_for(contract_id: str) -> str:
     supported water source of the Energy dashboard, and keep the real reading dates.
     """
     return f"{DOMAIN}:water_consumption_{contract_id}"
+
+
+def cost_statistic_id_for(contract_id: str) -> str:
+    """Id of the external statistic holding the water cost of a contract, to use as the cost of the Energy
+    dashboard water source. External for the same reasons as the consumption, see statistic_id_for."""
+    return f"{DOMAIN}:water_cost_{contract_id}"
+
+
+@dataclass(frozen=True)
+class PricePeriod:
+    """A price per m³ (incl. tax, excluding the subscription), in force from its start date until the next one."""
+    start: date
+    price: float
+
+
+def price_at(periods: list[PricePeriod], day: date) -> float | None:
+    """Return the price in force on that day, or None if it is before the first price period."""
+    in_force = [p for p in periods if p.start <= day]
+    return max(in_force, key=lambda p: p.start).price if in_force else None
 
 
 @dataclass(frozen=True)
@@ -144,7 +164,8 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             username: str,
             password: str,
             contract_ids: list[str],
-            import_statistics: bool
+            import_statistics: bool,
+            price_periods: dict[str, list[PricePeriod]] | None = None,
     ) -> None:
         """Initialize."""
         self.platforms = []
@@ -157,6 +178,7 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
         self.password = password
         self.contract_ids = contract_ids
         self.import_statistics = import_statistics
+        self.price_periods = price_periods or {}
         # One HTTP session for the lifetime of the coordinator: some providers (Eau de Paris)
         # sit behind a load balancer that sets an affinity cookie on generateToken, which
         # every later call must carry.
@@ -329,6 +351,74 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
             unit_class=VolumeConverter.UNIT_CLASS,
         )
         async_add_external_statistics(self.hass, metadata, statistics)
+
+        await self._async_handle_cost_statistics(contract_id, readings)
+
+    async def _async_handle_cost_statistics(self, contract_id: str, readings: list[AgurReading]) -> None:
+        """Import the cost of every reading of the history that has a price, i.e. its consumption times the price
+        in force on its date. Readings before the first price period have no cost (no row, rather than 0 €).
+
+        Unlike the consumption, the whole history sent by the API is recomputed at each update, so that a price
+        added or corrected late applies back to its start date. Only the rows that changed are written. Rows older
+        than that history are kept, and the sums continue from them. If a row of that history no longer has a
+        price (a price period was removed or now starts later), the recorder cannot delete single rows: the cost
+        statistic is cleared and rebuilt from the history alone.
+        """
+        statistic_id = cost_statistic_id_for(contract_id)
+        periods = self.price_periods.get(contract_id, [])
+        costs: list[tuple[datetime, float]] = []
+        for reading in readings:
+            price = price_at(periods, reading.point.date.date())
+            if price is not None:
+                costs.append((_statistic_start(reading.point), round(reading.consumption / 1000 * price, 4)))
+
+        stored = await self._async_stored_costs(statistic_id)
+        history_start = _statistic_start(readings[0].point).timestamp()
+        priced = {start.timestamp() for start, _ in costs}
+        if any(start >= history_start and start not in priced for start in stored):
+            _LOGGER.info(f"Rebuilding {statistic_id}: some readings no longer have a price")
+            get_instance(self.hass).async_clear_statistics([statistic_id])
+            stored = {}
+
+        if not costs:
+            return
+
+        first = costs[0][0].timestamp()
+        older = [start for start in stored if start < first]
+        total = stored[max(older)][0] if older else 0.0
+        statistics = []
+        for start, cost in costs:
+            total = round(total + cost, 4)
+            row = stored.get(start.timestamp())
+            if row is None or not isclose(row[0], total, abs_tol=1e-4) or not isclose(row[1], cost, abs_tol=1e-4):
+                statistics.append(StatisticData(start=start, state=cost, sum=total))
+        if not statistics:
+            return
+
+        metadata = StatisticMetaData(
+            mean_type=StatisticMeanType.NONE,
+            has_sum=True,
+            name=f"Water cost {contract_id}",
+            source=DOMAIN,
+            statistic_id=statistic_id,
+            unit_of_measurement=CURRENCY_EURO,
+            unit_class=None,
+        )
+        async_add_external_statistics(self.hass, metadata, statistics)
+
+    async def _async_stored_costs(self, statistic_id: str) -> dict[float, tuple[float, float]]:
+        """Return the stored cost rows, as {start timestamp: (sum, state)}."""
+        stored = await get_instance(self.hass).async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            None,
+            {statistic_id},
+            "hour",
+            None,
+            {"sum", "state"},
+        )
+        return {row["start"]: (row["sum"], row["state"]) for row in stored.get(statistic_id, [])}
 
     async def _async_statistics_offset(
             self,

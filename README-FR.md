@@ -79,11 +79,46 @@ complété chaque jour, aux dates réelles de relevé. Sélectionnez cette stati
 `Énergie` (son identifiant figure aussi dans l'attribut `statistic_id` de `sensor.agur_last_index_<numéro de contrat>`).
 
 L'historique n'est volontairement pas rattaché à un capteur : Home Assistant compile ses propres statistiques pour tout
-capteur doté d'un `state_class`, et elles se mélangeraient aux statistiques importées.
+capteur doté d'un `state_class`, et elles se mélangeraient aux statistiques importées. Voir [la décision d'architecture](docs/adr/0001-external-statistics-for-consumption-and-cost.md) (en anglais) pour le détail.
 
 > [!NOTE]
 > L'API retourne les données de consommation avec 24 ou 48 heures de délais et ces données ne sont mises à jour qu'une 
 > fois par jour. Il est malheureusement impossible de récupérer des données plus détaillées.
+
+### Coût de l'eau
+
+L'API Agur ne fournit pas le prix de l'eau : vous le saisissez vous-même. Le coût de chaque relevé (sa consommation
+multipliée par le prix en vigueur à sa date) est alors importé dans la statistique externe
+`agur:water_cost_<numéro de contrat>` (en €), que le tableau de bord `Énergie` peut afficher à côté de la consommation.
+
+#### Saisir le prix
+
+1. Allez dans `Paramètres` > `Appareils et services` > `Agur`.
+2. Cliquez sur `Ajouter un prix`, en haut de la page, à côté de `Ajouter une entrée`.
+3. Renseignez :
+   - `Abonnement` : demandé seulement si votre compte a plusieurs abonnements.
+   - `Date de début` : le premier jour où le prix s'applique.
+   - `Prix du m³` : TTC et hors abonnement, tel qu'indiqué sur votre facture (par exemple `4,23`).
+4. Validez. Le prix apparaît sous votre compte sur la même page, où vous pouvez le modifier ou le supprimer.
+
+Un prix s'applique de sa date de début jusqu'au prix suivant du même abonnement : quand le tarif change, en général une
+fois par an, ajoutez un nouveau prix plutôt que de modifier le précédent. À chaque ajout, modification ou suppression
+d'un prix, le coût est recalculé sur tout l'historique fourni par l'API : un prix saisi en retard s'applique donc bien
+depuis sa date de début. Les relevés antérieurs au premier prix d'un abonnement n'ont pas de coût.
+
+#### L'afficher dans le tableau de bord Énergie
+
+1. Allez dans `Paramètres` > `Tableaux de bord` > `Énergie`, puis l'onglet `Eau`.
+2. Sous `Consommation d'eau`, cliquez sur `Ajouter une source d'eau` (ou sur le crayon de la source existante).
+3. Dans `Consommation d'eau`, sélectionnez `Water consumption <numéro de contrat>` (source `Agur`).
+4. Parmi les options de coût, choisissez `Utiliser une entité de suivi des coûts totaux`, puis sélectionnez
+   `Water cost <numéro de contrat>` (source `Agur`) dans `Entité avec les coûts totaux`.
+5. Enregistrez. Le coût apparaît dans le tableau de bord `Énergie`, dans les cartes de l'eau et des coûts.
+
+> [!NOTE]
+> `Utiliser un prix statique` et `Utiliser une entité avec le prix actuel` ne conviennent pas ici : Home Assistant ne
+> les applique qu'aux changements d'un capteur, ils ne valoriseraient donc ni l'historique, ni les corrections du
+> fournisseur.
 
 ## Langues
 
