@@ -46,6 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         import_statistics=import_statistics,
         price_periods=price_periods_from(config_entry),
     )
+    config_entry.async_on_unload(coordinator.close)
     if import_statistics:
         # Before the first import, which writes in m³ under the same statistic id
         await async_convert_legacy_statistics(hass, contract_ids)
