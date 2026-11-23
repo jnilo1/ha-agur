@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import async_add_external_statistics, statistics_during_period
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.recorder import get_instance
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
+from requests import HTTPError
 
 from custom_components.agur.agur_client import AgurDataPoint
 from custom_components.agur.const import DOMAIN
@@ -301,3 +304,52 @@ async def test_statistics_are_external(hass: HomeAssistant, agur_api: FakeAgurAp
     assert len(await _statistics(hass, CONTRACT_1)) == 4
     attributes = hass.states.get(f"sensor.agur_last_index_{CONTRACT_1}").attributes
     assert attributes["statistic_id"] == f"agur:water_consumption_{CONTRACT_1}"
+
+
+def _unauthorized() -> HTTPError:
+    return HTTPError(response=MagicMock(status_code=401))
+
+
+async def test_rejected_stored_tokens_are_renewed_once(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """A 401 with tokens kept from a previous update renews them instead of asking to re-authenticate."""
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.http_session.cookies.set("BIGipServer", "stale-node")
+
+    agur_api.calls.clear()
+    agur_api.errors_once["get_data"] = _unauthorized()
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success
+    assert agur_api.calls.count("init") == 1
+    assert agur_api.calls.count("login") == 1
+    assert "BIGipServer" not in coordinator.http_session.cookies
+
+
+async def test_rejected_renewed_tokens_ask_to_reauthenticate(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    agur_api.calls.clear()
+    agur_api.errors["get_data"] = _unauthorized()
+    await coordinator.async_refresh()
+
+    assert not coordinator.last_update_success
+    # A single retry with new tokens
+    assert agur_api.calls.count("init") == 1
+    assert agur_api.calls.count("login") == 1
+    assert agur_api.calls.count("get_data") == 2
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+
+
+async def test_non_auth_error_is_not_retried(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    entry = await _setup(hass, contract_ids=[CONTRACT_1])
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    agur_api.calls.clear()
+    agur_api.errors_once["get_data"] = HTTPError(response=MagicMock(status_code=500))
+    await coordinator.async_refresh()
+
+    assert not coordinator.last_update_success
+    assert "init" not in agur_api.calls
+    assert agur_api.calls.count("get_data") == 1

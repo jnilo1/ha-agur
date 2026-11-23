@@ -32,6 +32,10 @@ SCAN_INTERVAL = timedelta(days=1)
 RESET_RATIO = 0.9
 
 
+def _is_unauthorized(exception: HTTPError) -> bool:
+    return exception.response is not None and exception.response.status_code == 401
+
+
 def statistic_id_for(contract_id: str) -> str:
     """Id of the external statistic holding the water consumption history of a contract.
 
@@ -186,50 +190,73 @@ class AgurDataUpdateCoordinator(DataUpdateCoordinator[dict[str, AgurDataUpdateCo
 
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=SCAN_INTERVAL)
 
+    def close(self) -> None:
+        """Release the HTTP connections held by the session."""
+        self.http_session.close()
+
     async def _async_update_data(self) -> dict[str, AgurDataUpdateCoordinatorData]:
         """Update data via library."""
+        # Tokens kept from a previous update can be invalidated by the server before
+        # their expiration date: a 401 then does not mean the credentials are wrong.
+        reused_tokens = self.auth_token is not None
+        try:
+            try:
+                return await self._async_fetch_data()
+            except HTTPError as exception:
+                if not reused_tokens or not _is_unauthorized(exception):
+                    raise
+                _LOGGER.debug("Agur API rejected the stored tokens: fetching new ones and retrying once")
+                self._forget_tokens()
+                return await self._async_fetch_data()
+        except HTTPError as exception:
+            if _is_unauthorized(exception):
+                raise ConfigEntryAuthFailed(f"Invalid credentials for Agur account {self.username}")
+            raise exception
+        except Exception as exception:
+            raise UpdateFailed(f"Error communicating with API: {exception}")
+
+    def _forget_tokens(self) -> None:
+        self.session_token = None
+        self.expiration_date = None
+        self.auth_token = None
+        # Drop the load balancer affinity cookie as well: the next generateToken sets a new one
+        self.http_session.cookies.clear()
+
+    async def _async_fetch_data(self) -> dict[str, AgurDataUpdateCoordinatorData]:
         # If we do not have any session token (first time)
         if self.session_token is None or self.expiration_date is None:
             _LOGGER.debug("First sync: fetching session token")
             await self._async_get_session_token()
 
-        try:
-            # If we do not have any auth token (first time)
-            if self.auth_token is None:
-                _LOGGER.debug("First sync: fetching auth token")
-                await self._async_get_auth_token()
+        # If we do not have any auth token (first time)
+        if self.auth_token is None:
+            _LOGGER.debug("First sync: fetching auth token")
+            await self._async_get_auth_token()
 
-            # If the session token is expired, retrieve one
-            if datetime.now().replace(tzinfo=self.expiration_date.tzinfo) > self.expiration_date:
-                _LOGGER.debug("Session token expired: fetching a new one")
-                await self._async_refresh_tokens()
+        # If the session token is expired, retrieve one
+        if datetime.now().replace(tzinfo=self.expiration_date.tzinfo) > self.expiration_date:
+            _LOGGER.debug("Session token expired: fetching a new one")
+            await self._async_refresh_tokens()
 
-            data: dict[str, AgurDataUpdateCoordinatorData] = {}
-            for contract_id in self.contract_ids:
-                _LOGGER.debug(f"Fetching details and history for contract '{contract_id}'")
-                results = await asyncio.gather(
-                    self._async_get_data_points(contract_id=contract_id),
-                    self._async_get_invoices(contract_id=contract_id),
-                    self._async_get_contract(contract_id=contract_id),
-                    self._async_get_balance(contract_id=contract_id),
-                )
-                data[contract_id] = AgurDataUpdateCoordinatorData(
-                    data_points=results[0],
-                    invoices=results[1],
-                    contract=results[2],
-                    balance=results[3],
-                )
+        data: dict[str, AgurDataUpdateCoordinatorData] = {}
+        for contract_id in self.contract_ids:
+            _LOGGER.debug(f"Fetching details and history for contract '{contract_id}'")
+            results = await asyncio.gather(
+                self._async_get_data_points(contract_id=contract_id),
+                self._async_get_invoices(contract_id=contract_id),
+                self._async_get_contract(contract_id=contract_id),
+                self._async_get_balance(contract_id=contract_id),
+            )
+            data[contract_id] = AgurDataUpdateCoordinatorData(
+                data_points=results[0],
+                invoices=results[1],
+                contract=results[2],
+                balance=results[3],
+            )
 
-                await self._handle_statistics(coordinator_data=data[contract_id])
+            await self._handle_statistics(coordinator_data=data[contract_id])
 
-            return data
-
-        except HTTPError as exception:
-            if exception.response.status_code == 401:
-                raise ConfigEntryAuthFailed(f"Invalid credentials for Agur account {self.username}")
-            raise exception
-        except Exception as exception:
-            raise UpdateFailed(f"Error communicating with API: {exception}")
+        return data
 
     async def _async_get_session_token(self) -> None:
         client = AgurClient(

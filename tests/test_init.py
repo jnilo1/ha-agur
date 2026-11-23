@@ -1,7 +1,7 @@
 """Tests for setting up, unloading and reloading the Agur integration."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -60,6 +60,28 @@ async def test_unload(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
 
     assert entry.state is ConfigEntryState.NOT_LOADED
     assert entry.entry_id not in hass.data[DOMAIN]
+
+
+async def test_unload_closes_the_http_session(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    entry = make_entry()
+    with patch("custom_components.agur.coordinator.Session") as session:
+        await _setup(hass, entry)
+        assert not session.return_value.close.called
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    session.return_value.close.assert_called_once()
+
+
+async def test_failed_setup_closes_the_http_session(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    agur_api.errors["get_data"] = ConnectionError("boom")
+    entry = make_entry()
+    with patch("custom_components.agur.coordinator.Session") as session:
+        await _setup(hass, entry)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    session.return_value.close.assert_called_once()
 
 
 async def test_options_update_reloads_once(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:

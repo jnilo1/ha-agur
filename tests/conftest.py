@@ -95,6 +95,8 @@ class FakeAgurApi:
         self.expiration_date = datetime.now().astimezone() + timedelta(hours=1)
         # Method name -> exception to raise
         self.errors: dict[str, Exception] = {}
+        # Method name -> exception to raise on the next call only
+        self.errors_once: dict[str, Exception] = {}
         self.calls: list[str] = []
         self.client_kwargs: list[dict[str, Any]] = []
 
@@ -104,6 +106,8 @@ class FakeAgurApi:
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
+        if name in self.errors_once:
+            raise self.errors_once.pop(name)
         if name in self.errors:
             raise self.errors[name]
 
