@@ -11,11 +11,10 @@ See in English | [Français](./README-FR.md)
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=tbouron&repository=ha-agur)
 
 Or:
-- Go to your Home Assistant.
-- Open HACS.
-- Search for `Agur`.
-- Click the `Download` button on the bottom right.
-- Restart Home Assistant.
+- Go to your Home Assistant > `Settings` > `Marketplace`.
+- In the upper-right corner, select `Add from link`.
+- Under GitHub link, enter the repository URL: `https://github.com/tbouron/ha-agur`.
+- Select `Add`.
 
 ### Manual
 
