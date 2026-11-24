@@ -6,13 +6,12 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from requests import HTTPError
 
-from custom_components.agur.const import CONF_CONTRACT_IDS, CONF_IMPORT_STATISTICS, DOMAIN
+from custom_components.agur.const import CONF_CONTRACT_IDS, CONF_IMPORT_STATISTICS, DOMAIN, STARTUP_MESSAGE
 
 from .conftest import CONTRACT_1, CONTRACT_2, ENTRY_ID, FakeAgurApi, make_entry
 
@@ -131,14 +130,15 @@ async def test_setup_fails_on_invalid_credentials(hass: HomeAssistant, agur_api:
     assert entry.state is ConfigEntryState.SETUP_ERROR
 
 
-async def test_startup_message_shows_the_integration_version(
-    hass: HomeAssistant, agur_api: FakeAgurApi, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_startup_message_shows_the_integration_version(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
     """The startup message shows the version of manifest.json, not the config entry version."""
     manifest = Path(__file__).parents[1] / "custom_components" / "agur" / "manifest.json"
     version = json.loads(manifest.read_text())["version"]
 
-    with caplog.at_level(logging.DEBUG, logger="custom_components.agur"):
+    # Spy on the logger rather than using caplog: the CI runs pytest with the logging plugin disabled
+    with patch.object(logging.getLogger("custom_components.agur"), "debug") as debug:
         await _setup(hass, make_entry())
 
-    assert f"Version: {version}\n" in caplog.text
+    startup = [c.args for c in debug.call_args_list if c.args and c.args[0] == STARTUP_MESSAGE]
+    assert startup == [(STARTUP_MESSAGE, version)]
+    assert f"Version: {version}\n" in STARTUP_MESSAGE % version
