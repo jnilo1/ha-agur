@@ -11,11 +11,10 @@ Voir en [English](./README.md) | Français
 [![Ouvrir votre instance Home Assistant et ouvrir le dépôt à l'intérieur du Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=tbouron&repository=ha-agur)
 
 Ou:
-- Ouvrir votre instance Home Assistant.
-- Ouvrir HACS.
-- Cherchez `Agur`.
-- Cliquez sur le bouton `Télécharger` en bas à droite.
-- Redémarrer Home Assistant.
+- Ouvrir votre instance Home Assistant > `Paramètres` > `Marketplace`.
+- Cliquer sur le bouton `Ajouter grâce à un lien` en haut à droite.
+- Dans le champ `Lien GitHub`, coller l'adresse: `https://github.com/tbouron/ha-agur`.
+- Cliquer sur `Ajouter`.
 
 ### Manuelle
 
