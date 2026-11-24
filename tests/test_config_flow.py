@@ -1,12 +1,13 @@
 """Tests for the Agur config and options flows."""
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from requests import HTTPError
 
 from custom_components.agur.const import (
     CONF_CONTRACT_IDS,
@@ -201,3 +202,72 @@ async def test_options_flow_missing_credentials(hass: HomeAssistant, agur_api: F
 
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["errors"] == {"base": "config"}
+
+
+async def _setup_loaded_entry(hass: HomeAssistant) -> MockConfigEntry:
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_reauth_updates_the_password(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    entry = await _setup_loaded_entry(hass)
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["description_placeholders"]["username"] == USERNAME
+
+    agur_api.calls.clear()
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_PASSWORD: "new-secret"})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data == {CONF_PROVIDER: "ael", CONF_USERNAME: USERNAME, CONF_PASSWORD: "new-secret"}
+    assert entry.state is config_entries.ConfigEntryState.LOADED
+    # The password is checked by the flow, then the entry is reloaded once with it
+    assert agur_api.calls.count("login") == 2
+
+
+async def test_reauth_with_a_wrong_password_shows_an_error(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    entry = await _setup_loaded_entry(hass)
+    result = await entry.start_reauth_flow(hass)
+
+    agur_api.errors["login"] = HTTPError(response=MagicMock(status_code=401))
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_PASSWORD: "wrong"})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "auth"}
+    assert entry.data[CONF_PASSWORD] == PASSWORD
+
+    del agur_api.errors["login"]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_PASSWORD: "new-secret"})
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_PASSWORD] == "new-secret"
+
+
+async def test_rejected_credentials_start_a_reauth_flow(hass: HomeAssistant, agur_api: FakeAgurApi) -> None:
+    """The ConfigEntryAuthFailed raised by the coordinator opens the reauth form."""
+    agur_api.errors["login"] = HTTPError(response=MagicMock(status_code=401))
+    entry = await _setup_loaded_entry(hass)
+
+    assert entry.state is config_entries.ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [(flow["context"]["source"], flow["step_id"]) for flow in flows] == [
+        (config_entries.SOURCE_REAUTH, "reauth_confirm")
+    ]
+
+    del agur_api.errors["login"]
+    agur_api.calls.clear()
+    result = await hass.config_entries.flow.async_configure(flows[0]["flow_id"], {CONF_PASSWORD: "new-secret"})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.state is config_entries.ConfigEntryState.LOADED
+    assert agur_api.calls.count("login") == 2

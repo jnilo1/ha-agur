@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -40,6 +41,16 @@ USER_SCHEMA = vol.Schema(
                 autocomplete="username"
             )
         ),
+        vol.Required(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD,
+                autocomplete="current-password"
+            )
+        )
+    }
+)
+REAUTH_SCHEMA = vol.Schema(
+    {
         vol.Required(CONF_PASSWORD): TextSelector(
             TextSelectorConfig(
                 type=TextSelectorType.PASSWORD,
@@ -169,6 +180,46 @@ class AgurConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._import_statistics = user_input[CONF_IMPORT_STATISTICS]
 
         return await self._async_agur_configuration(step_id="configuration")
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+        """Start a reauthentication, when the API rejects the stored credentials."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Ask for the new password of the account. The username is the unique id of the entry: it is kept."""
+        entry = self._get_reauth_entry()
+        username = entry.data[CONF_USERNAME]
+        errors = {}
+
+        if user_input is not None:
+            try:
+                tokens = await get_agur_tokens(
+                    hass=self.hass,
+                    username=username,
+                    password=user_input[CONF_PASSWORD],
+                    provider=entry.data.get(CONF_PROVIDER, DEFAULT_PROVIDER),
+                )
+            except AuthError as ex:
+                _LOGGER.error(ex)
+                errors = {"base": "auth"}
+            else:
+                tokens[HTTP_SESSION].close()
+                # A loaded entry is reloaded by its update listener when its data changes. An entry whose
+                # setup failed has no listener: reload it here.
+                needs_reload = entry.state is not config_entries.ConfigEntryState.LOADED
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
+                )
+                if needs_reload:
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=REAUTH_SCHEMA,
+            description_placeholders={"username": username},
+            errors=errors,
+        )
 
     async def _async_agur_login(self, step_id: str) -> FlowResult:
         """Handle login with Agur."""

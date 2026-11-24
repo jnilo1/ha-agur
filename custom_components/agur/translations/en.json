@@ -21,6 +21,13 @@
           "contract_ids": "Please select the Agur contracts you wish to import in Home Assistant.",
           "import_statistics": "If this is checked, then the historical data will be imported along side the new data. Please be aware that if you uncheck this after you enabled it, the statistics data will be kept."
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate the Agur account",
+        "description": "The provider rejected the password of **{username}**. Please enter its current password.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {

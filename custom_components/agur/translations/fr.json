@@ -21,6 +21,13 @@
           "contract_ids": "Merci de sélectionner les abonnements Agur que vous souhaitez importer dans Home Assistant.",
           "import_statistics": "Si vous cochez cette case, l'historique sera importé en même temps que les données à J-1. Veuillez noter que si vous décochez cette case après l'avoir activé, l'historique sera gardé."
         }
+      },
+      "reauth_confirm": {
+        "title": "Ré-authentifier le compte Agur",
+        "description": "Le fournisseur a refusé le mot de passe de **{username}**. Merci d'entrer son mot de passe actuel.",
+        "data": {
+          "password": "Mot de passe"
+        }
       }
     },
     "error": {
