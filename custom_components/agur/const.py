@@ -50,12 +50,13 @@ PROVIDERS = {
 SENSOR_PLATFORM: str = "sensor"
 PLATFORMS = [SENSOR_PLATFORM]
 
+# Logged with the integration version from manifest.json. VERSION above is the config entry version, not this one.
 STARTUP_MESSAGE = f"""
 ---------------------------------------------------------------------
 {DEFAULT_NAME} integration
 Custom integration to fetch water data from Agur: https://ael.agur.fr
 
 Domain: {DOMAIN}
-Version: {VERSION}
+Version: %s
 ---------------------------------------------------------------------
 """

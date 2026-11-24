@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.loader import async_get_integration
 
 from .const import DOMAIN, STARTUP_MESSAGE, CONF_USERNAME, CONF_PASSWORD, PLATFORMS, CONF_CONTRACT_IDS, \
     CONF_IMPORT_STATISTICS, CONF_PROVIDER, DEFAULT_PROVIDER, VERSION, SUBENTRY_TYPE_PRICE, CONF_CONTRACT_ID, \
@@ -29,7 +30,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     """Set up this integration using UI."""
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
-        _LOGGER.debug(STARTUP_MESSAGE)
+        integration = await async_get_integration(hass, DOMAIN)
+        _LOGGER.debug(STARTUP_MESSAGE, integration.version)
 
     provider: str = config_entry.data.get(CONF_PROVIDER, DEFAULT_PROVIDER)
     username: str = config_entry.data.get(CONF_USERNAME)

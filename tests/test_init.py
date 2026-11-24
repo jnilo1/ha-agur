@@ -1,8 +1,12 @@
 """Tests for setting up, unloading and reloading the Agur integration."""
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -125,3 +129,16 @@ async def test_setup_fails_on_invalid_credentials(hass: HomeAssistant, agur_api:
     entry = make_entry()
     await _setup(hass, entry)
     assert entry.state is ConfigEntryState.SETUP_ERROR
+
+
+async def test_startup_message_shows_the_integration_version(
+    hass: HomeAssistant, agur_api: FakeAgurApi, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The startup message shows the version of manifest.json, not the config entry version."""
+    manifest = Path(__file__).parents[1] / "custom_components" / "agur" / "manifest.json"
+    version = json.loads(manifest.read_text())["version"]
+
+    with caplog.at_level(logging.DEBUG, logger="custom_components.agur"):
+        await _setup(hass, make_entry())
+
+    assert f"Version: {version}\n" in caplog.text
